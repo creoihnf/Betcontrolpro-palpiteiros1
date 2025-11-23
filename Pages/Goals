@@ -1,0 +1,917 @@
+
+import React, { useState, useEffect } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Target,
+  Plus,
+  TrendingUp,
+  Calendar,
+  Award,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  Brain,
+  Sparkles,
+  Trophy,
+  Zap,
+  Star,
+  BarChart3
+} from "lucide-react";
+import { toast } from "sonner";
+import { format, differenceInDays } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import { motion, AnimatePresence } from "framer-motion";
+import GoalProgress from '../components/goals/GoalProgress';
+import useRealtimeSync from '../components/utils/useRealtimeSync';
+import RealtimeIndicator from '../components/realtime/RealtimeIndicator';
+import GoalCreationWizard from '../components/goals/GoalCreationWizard';
+import GoalDetailView from '../components/goals/GoalDetailView';
+import CelebrationModal from '../components/goals/CelebrationModal';
+import LevelUpModal from '../components/gamification/LevelUpModal';
+
+export default function GoalsPage() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [showGoalModal, setShowGoalModal] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
+  const [showAISuggestionsModal, setShowAISuggestionsModal] = useState(false);
+  const [showDetailView, setShowDetailView] = useState(false);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const [showLevelUp, setShowLevelUp] = useState(false);
+  const [editingGoal, setEditingGoal] = useState(null);
+  const [selectedGoal, setSelectedGoal] = useState(null);
+  const [aiSuggestions, setAISuggestions] = useState(null);
+  const [loadingAI, setLoadingAI] = useState(false);
+  const [selectedTab, setSelectedTab] = useState('active');
+  const [levelUpData, setLevelUpData] = useState(null);
+  const [celebrationData, setCelebrationData] = useState(null);
+  
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    loadUser();
+  }, []);
+
+  const loadUser = async () => {
+    const user = await base44.auth.me();
+    setCurrentUser(user);
+  };
+
+  // ✅ REAL-TIME SYNC
+  const realtimeSync = useRealtimeSync(
+    [
+      ['goals', currentUser?.email],
+      ['user-level', currentUser?.email],
+      ['user-achievements', currentUser?.email],
+      ['goal-steps'],
+      ['goal-milestones']
+    ],
+    {
+      enabled: !!currentUser,
+      initialInterval: 15000,
+      onUpdate: () => console.log('📡 Metas atualizadas')
+    }
+  );
+
+  const { data: goals = [] } = useQuery({
+    queryKey: ['goals', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.Goal.filter({ created_by: currentUser.email });
+    },
+    enabled: !!currentUser
+  });
+
+  const { data: userLevel } = useQuery({
+    queryKey: ['user-level', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return null;
+      const levels = await base44.entities.UserLevel.filter({ user_email: currentUser.email });
+      return levels[0] || null;
+    },
+    enabled: !!currentUser
+  });
+
+  const { data: achievements = [] } = useQuery({
+    queryKey: ['user-achievements', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.UserAchievement.filter({ user_email: currentUser.email });
+    },
+    enabled: !!currentUser
+  });
+
+  const createGoalMutation = useMutation({
+    mutationFn: async (goalData) => {
+      return await base44.entities.Goal.create(goalData);
+    },
+    onSuccess: async (newGoal) => {
+      await queryClient.invalidateQueries(['goals']);
+      toast.success('✅ Meta criada!');
+      setShowGoalModal(false);
+      setShowWizard(false);
+      setEditingGoal(null);
+      
+      // Auto-create milestones
+      await createAutoMilestones(newGoal.id, newGoal.target_value);
+    }
+  });
+
+  const createAutoMilestones = async (goalId, targetValue) => {
+    if (typeof targetValue === 'undefined' || targetValue === null || isNaN(parseFloat(targetValue))) {
+      console.warn("Target value is invalid, skipping auto-milestone creation.");
+      return;
+    }
+
+    const numericTargetValue = parseFloat(targetValue);
+    const percentages = [25, 50, 75, 100];
+    
+    for (const percent of percentages) {
+      const milestoneValue = (numericTargetValue * percent) / 100;
+
+      await base44.entities.GoalMilestone.create({
+        goal_id: goalId,
+        title: percent === 100 ? '🏁 Meta Concluída!' : `Checkpoint ${percent}%`,
+        description: `Alcançar ${percent}% da meta (aprox. ${milestoneValue.toFixed(2)})`,
+        progress_percentage: percent,
+        reward_points: Math.round((percent / 100) * 50),
+        icon: percent === 100 ? 'Trophy' : 'Target',
+        color: percent >= 75 ? '#10b981' : percent >= 50 ? '#3b82f6' : '#f59e0b',
+        created_by: currentUser.email
+      });
+    }
+
+    await queryClient.invalidateQueries(['goal-milestones']);
+  };
+
+  const updateGoalMutation = useMutation({
+    mutationFn: async ({ goalId, data }) => {
+      return await base44.entities.Goal.update(goalId, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['goals']);
+      toast.success('✅ Meta atualizada!');
+      setShowGoalModal(false);
+      setShowWizard(false);
+      setShowDetailView(false); // Close detail view after update
+      setEditingGoal(null);
+      setSelectedGoal(null); // Clear selected goal
+    }
+  });
+
+  const deleteGoalMutation = useMutation({
+    mutationFn: async (goalId) => {
+      return await base44.entities.Goal.delete(goalId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['goals']);
+      toast.success('✅ Meta deletada!');
+      setShowDetailView(false); // Close detail view after delete
+      setSelectedGoal(null); // Clear selected goal
+    }
+  });
+
+  // ✅ AI SUGGESTIONS
+  const fetchAISuggestions = async () => {
+    setLoadingAI(true);
+    try {
+      const response = await base44.functions.invoke('ai/suggestSmartGoals', {
+        user_id: currentUser.email
+      });
+
+      if (response.data?.success) {
+        setAISuggestions(response.data);
+        setShowAISuggestionsModal(true);
+      } else {
+        toast.error(response.data?.error || 'Erro ao gerar sugestões');
+      }
+    } catch (error) {
+      console.error('AI Error:', error);
+      toast.error('Erro ao conectar com IA');
+    } finally {
+      setLoadingAI(false);
+    }
+  };
+
+  const acceptAISuggestion = async (suggestion) => {
+    try {
+      const goalData = {
+        title: suggestion.title,
+        description: suggestion.description,
+        category: suggestion.category,
+        goal_type: suggestion.steps?.length > 1 ? 'multi_step' : 'simple',
+        difficulty: suggestion.difficulty,
+        target_value: suggestion.target_value,
+        unit: suggestion.unit,
+        start_date: new Date().toISOString().split('T')[0],
+        end_date: new Date(Date.now() + suggestion.timeframe_days * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        status: 'active',
+        is_ai_suggested: true,
+        ai_confidence_score: suggestion.ai_confidence_score,
+        ai_reasoning: suggestion.reasoning,
+        reward_points: suggestion.reward_points,
+        badge_earned: suggestion.badge_earned,
+        total_steps: suggestion.steps?.length || 1,
+        metadata: {
+          expected_benefit: suggestion.expected_benefit,
+          required_actions: suggestion.required_actions
+        },
+        created_by: currentUser.email
+      };
+
+      const newGoal = await base44.entities.Goal.create(goalData);
+
+      // Criar steps se existirem
+      if (suggestion.steps && suggestion.steps.length > 0) {
+        for (let i = 0; i < suggestion.steps.length; i++) {
+          const step = suggestion.steps[i];
+          await base44.entities.GoalStep.create({
+            goal_id: newGoal.id,
+            step_number: i + 1,
+            title: step.title,
+            description: step.description,
+            target_value: step.target_value,
+            is_milestone: step.is_milestone || false,
+            status: 'pending',
+            order: i,
+            created_by: currentUser.email
+          });
+        }
+      }
+
+      await createAutoMilestones(newGoal.id, newGoal.target_value); // Also create milestones for AI goals
+
+      queryClient.invalidateQueries(['goals']);
+      setShowAISuggestionsModal(false);
+      toast.success('✅ Meta adicionada com IA!');
+    } catch (error) {
+      console.error('Error accepting suggestion:', error);
+      toast.error('Erro ao criar meta');
+    }
+  };
+
+  const calculateStats = () => {
+    const active = goals.filter(g => g.status === 'active').length;
+    const achieved = goals.filter(g => g.status === 'completed' || g.status === 'achieved').length;
+    const overdue = goals.filter(g => {
+      if (g.status !== 'active') return false;
+      return new Date(g.end_date || g.target_date) < new Date();
+    }).length;
+
+    const avgProgress = goals.length > 0
+      ? goals.reduce((sum, g) => sum + (g.progress_percentage || 0), 0) / goals.length
+      : 0;
+
+    return { active, achieved, overdue, avgProgress };
+  };
+
+  const stats = calculateStats();
+
+  const filteredGoals = goals.filter(g => {
+    if (selectedTab === 'active') return g.status === 'active';
+    if (selectedTab === 'completed') return g.status === 'completed' || g.status === 'achieved';
+    if (selectedTab === 'all') return true;
+    return true;
+  });
+
+  const handleSubmit = (goalData) => {
+    if (editingGoal) {
+      updateGoalMutation.mutate({
+        goalId: editingGoal.id,
+        data: goalData
+      });
+    } else {
+      createGoalMutation.mutate({
+        ...goalData,
+        created_by: currentUser.email
+      });
+    }
+  };
+
+  const handleGoalClick = (goal) => {
+    setSelectedGoal(goal);
+    setShowDetailView(true);
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6">
+      
+      <RealtimeIndicator
+        isConnected={realtimeSync.isConnected}
+        lastSync={realtimeSync.lastSync}
+        syncCount={realtimeSync.syncCount}
+      />
+
+      <div className="max-w-7xl mx-auto space-y-6">
+        
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+              <Target className="w-8 h-8 text-orange-400" />
+              Metas e Conquistas
+            </h1>
+            <p className="text-slate-400 mt-2">
+              Sistema inteligente de objetivos com gamificação
+            </p>
+          </div>
+
+          <div className="flex gap-2">
+            <Button
+              onClick={fetchAISuggestions}
+              disabled={loadingAI}
+              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+            >
+              <Brain className="w-5 h-5 mr-2" />
+              {loadingAI ? 'Gerando...' : 'Sugestões IA'}
+            </Button>
+
+            <Button
+              onClick={() => {
+                setEditingGoal(null);
+                setShowWizard(true);
+              }}
+              className="bg-orange-600 hover:bg-orange-700"
+            >
+              <Plus className="w-5 h-5 mr-2" />
+              Nova Meta
+            </Button>
+          </div>
+        </div>
+
+        {/* User Level Card */}
+        {userLevel && (
+          <motion.div
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+          >
+            <Card className="bg-gradient-to-br from-purple-900/30 to-purple-800/30 border-purple-700">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-16 h-16 bg-gradient-to-br from-purple-600 to-pink-600 rounded-full flex items-center justify-center">
+                      <Trophy className="w-8 h-8 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-purple-200 text-sm">Nível {userLevel.current_level}</p>
+                      <p className="text-white font-bold text-2xl">{userLevel.rank_title}</p>
+                      <p className="text-purple-300 text-xs mt-1">
+                        {userLevel.total_goals_completed} metas completadas
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-purple-200 text-sm mb-2">
+                      {userLevel.current_level_xp} / {userLevel.xp_to_next_level} XP
+                    </p>
+                    <Progress 
+                      value={(userLevel.current_level_xp / userLevel.xp_to_next_level) * 100}
+                      className="w-48 h-3"
+                    />
+                    <p className="text-xs text-purple-300 mt-1">
+                      {userLevel.xp_to_next_level - userLevel.current_level_xp} XP para próximo nível
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+
+        {/* Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <Card className="bg-slate-800/50 border-slate-700">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-slate-400 text-sm">Ativas</p>
+                  <p className="text-3xl font-bold text-white mt-1">{stats.active}</p>
+                </div>
+                <Target className="w-10 h-10 text-blue-400 opacity-50" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-slate-800/50 border-slate-700">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-slate-400 text-sm">Concluídas</p>
+                  <p className="text-3xl font-bold text-green-400 mt-1">{stats.achieved}</p>
+                </div>
+                <CheckCircle2 className="w-10 h-10 text-green-400 opacity-50" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-slate-800/50 border-slate-700">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-slate-400 text-sm">Atrasadas</p>
+                  <p className="text-3xl font-bold text-red-400 mt-1">{stats.overdue}</p>
+                </div>
+                <AlertTriangle className="w-10 h-10 text-red-400 opacity-50" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-slate-800/50 border-slate-700">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-slate-400 text-sm">Progresso Médio</p>
+                  <p className="text-3xl font-bold text-purple-400 mt-1">
+                    {stats.avgProgress.toFixed(0)}%
+                  </p>
+                </div>
+                <TrendingUp className="w-10 h-10 text-purple-400 opacity-50" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Tabs */}
+        <Tabs value={selectedTab} onValueChange={setSelectedTab}>
+          <TabsList className="bg-slate-800 border border-slate-700">
+            <TabsTrigger value="active">
+              Ativas ({goals.filter(g => g.status === 'active').length})
+            </TabsTrigger>
+            <TabsTrigger value="completed">
+              Concluídas ({goals.filter(g => g.status === 'completed' || g.status === 'achieved').length})
+            </TabsTrigger>
+            <TabsTrigger value="all">
+              Todas ({goals.length})
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value={selectedTab} className="mt-6">
+            {filteredGoals.length === 0 ? (
+              <Card className="bg-slate-800/50 border-slate-700">
+                <CardContent className="p-12 text-center">
+                  <Target className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+                  <h3 className="text-white text-xl font-semibold mb-2">
+                    Nenhuma meta encontrada
+                  </h3>
+                  <div className="flex gap-3 justify-center mt-6">
+                    <Button
+                      onClick={fetchAISuggestions}
+                      disabled={loadingAI}
+                      className="bg-gradient-to-r from-purple-600 to-pink-600"
+                    >
+                      <Brain className="w-5 h-5 mr-2" />
+                      {loadingAI ? 'Gerando...' : 'Sugestões IA'}
+                    </Button>
+                    
+                    <Button
+                      onClick={() => setShowWizard(true)}
+                      className="bg-orange-600"
+                    >
+                      <Plus className="w-5 h-5 mr-2" />
+                      Criar Manualmente
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <AnimatePresence mode="popLayout">
+                  {filteredGoals.map(goal => (
+                    <motion.div
+                      key={goal.id}
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      layout
+                    >
+                      <GoalProgress
+                        goal={goal}
+                        onClick={() => handleGoalClick(goal)}
+                      />
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
+
+        {/* Achievements Section */}
+        {achievements.length > 0 && (
+          <Card className="bg-slate-800/50 border-slate-700">
+            <CardHeader>
+              <CardTitle className="text-white flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-yellow-400" />
+                Conquistas Recentes
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {achievements.slice(0, 8).map((achievement, idx) => (
+                  <motion.div
+                    key={achievement.id}
+                    initial={{ opacity: 0, scale: 0 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: idx * 0.1 }}
+                    className={`p-4 rounded-lg border-2 text-center ${
+                      achievement.rarity === 'legendary' ? 'bg-gradient-to-br from-yellow-900/30 to-yellow-800/30 border-yellow-600' :
+                      achievement.rarity === 'epic' ? 'bg-gradient-to-br from-purple-900/30 to-purple-800/30 border-purple-600' :
+                      achievement.rarity === 'rare' ? 'bg-gradient-to-br from-blue-900/30 to-blue-800/30 border-blue-600' :
+                      'bg-slate-900/50 border-slate-700'
+                    }`}
+                  >
+                    <div className="text-3xl mb-2">
+                      {achievement.rarity === 'legendary' ? '👑' :
+                       achievement.rarity === 'epic' ? '💎' :
+                       achievement.rarity === 'rare' ? '⭐' : '🏅'}
+                    </div>
+                    <p className="text-white text-sm font-semibold">{achievement.title}</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      +{achievement.points_awarded} XP
+                    </p>
+                  </motion.div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        <GoalCreationWizard
+          open={showWizard}
+          onClose={() => {
+            setShowWizard(false);
+            setEditingGoal(null);
+          }}
+          onSubmit={handleSubmit}
+          initialData={editingGoal}
+        />
+
+        {selectedGoal && (
+          <Dialog open={showDetailView} onOpenChange={setShowDetailView}>
+            <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto bg-slate-900 border-slate-700">
+              <GoalDetailView
+                goal={selectedGoal}
+                onClose={() => setShowDetailView(false)}
+                onEdit={() => {
+                  setEditingGoal(selectedGoal);
+                  setShowDetailView(false);
+                  setShowWizard(true);
+                }}
+                onDelete={() => deleteGoalMutation.mutate(selectedGoal.id)}
+              />
+            </DialogContent>
+          </Dialog>
+        )}
+
+        <CelebrationModal
+          open={showCelebration}
+          onClose={() => setShowCelebration(false)}
+          goal={celebrationData?.goal}
+          achievement={celebrationData?.achievement}
+          levelUp={levelUpData}
+        />
+
+        <LevelUpModal
+          open={showLevelUp}
+          onClose={() => setShowLevelUp(false)}
+          oldLevel={levelUpData?.old_level}
+          newLevel={levelUpData?.new_level}
+          newRankTitle={levelUpData?.new_rank_title}
+        />
+
+        {/* AI Suggestions Modal */}
+        <AISuggestionsModal
+          open={showAISuggestionsModal}
+          onClose={() => setShowAISuggestionsModal(false)}
+          suggestions={aiSuggestions}
+          onAccept={acceptAISuggestion}
+        />
+      </div>
+    </div>
+  );
+}
+
+function GoalModal({ open, onClose, goal, onSubmit, onDelete }) {
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    category: 'profit', // Changed from type to category
+    difficulty: 'intermediate', // New field
+    target_value: '',
+    unit: 'BRL', // New field
+    start_date: format(new Date(), 'yyyy-MM-dd'),
+    end_date: '',
+    status: 'active'
+  });
+
+  useEffect(() => {
+    if (goal) {
+      setFormData({
+        title: goal.title || '',
+        description: goal.description || '',
+        category: goal.category || goal.type || 'profit', // Added category, keeping type for backward compatibility
+        difficulty: goal.difficulty || 'intermediate', // New field
+        target_value: goal.target_value || '',
+        unit: goal.unit || 'BRL', // New field
+        start_date: goal.start_date ? format(new Date(goal.start_date), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'),
+        end_date: goal.end_date ? format(new Date(goal.end_date), 'yyyy-MM-dd') : goal.target_date ? format(new Date(goal.target_date), 'yyyy-MM-dd') : '',
+        status: goal.status || 'active'
+      });
+    } else {
+      setFormData({
+        title: '',
+        description: '',
+        category: 'profit',
+        difficulty: 'intermediate',
+        target_value: '',
+        unit: 'BRL',
+        start_date: format(new Date(), 'yyyy-MM-dd'),
+        end_date: '',
+        status: 'active'
+      });
+    }
+  }, [goal]);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSubmit(formData);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl bg-slate-900 border-slate-700">
+        <DialogHeader>
+          <DialogTitle className="text-white">
+            {goal ? 'Editar Meta' : 'Nova Meta'}
+          </DialogTitle>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <Label className="text-white">Título *</Label>
+            <Input
+              value={formData.title}
+              onChange={(e) => setFormData({...formData, title: e.target.value})}
+              placeholder="Ex: Lucrar R$ 10.000"
+              className="mt-2 bg-slate-800 border-slate-700 text-white"
+              required
+            />
+          </div>
+
+          <div>
+            <Label className="text-white">Descrição</Label>
+            <Textarea
+              value={formData.description}
+              onChange={(e) => setFormData({...formData, description: e.target.value})}
+              placeholder="Detalhes da meta..."
+              className="mt-2 bg-slate-800 border-slate-700 text-white"
+              rows={3}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label className="text-white">Categoria *</Label> {/* Changed from Tipo to Categoria */}
+              <Select value={formData.category} onValueChange={(v) => setFormData({...formData, category: v})}>
+                <SelectTrigger className="mt-2 bg-slate-800 border-slate-700 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-slate-700">
+                  <SelectItem value="profit">💰 Lucro Total</SelectItem>
+                  <SelectItem value="roi">📈 ROI %</SelectItem>
+                  <SelectItem value="win_rate">🎯 Win Rate %</SelectItem>
+                  <SelectItem value="volume">📊 Volume de Apostas</SelectItem> {/* New category */}
+                  <SelectItem value="streak">🔥 Sequência</SelectItem> {/* New category */}
+                  <SelectItem value="custom">⚙️ Personalizada</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label className="text-white">Dificuldade</Label> {/* New field */}
+              <Select value={formData.difficulty} onValueChange={(v) => setFormData({...formData, difficulty: v})}>
+                <SelectTrigger className="mt-2 bg-slate-800 border-slate-700 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-slate-700">
+                  <SelectItem value="beginner">🌱 Iniciante</SelectItem>
+                  <SelectItem value="intermediate">⭐ Intermediário</SelectItem>
+                  <SelectItem value="advanced">🔥 Avançado</SelectItem>
+                  <SelectItem value="expert">💎 Expert</SelectItem>
+                  <SelectItem value="legendary">👑 Lendário</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label className="text-white">Valor Alvo *</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={formData.target_value}
+                onChange={(e) => setFormData({...formData, target_value: e.target.value})}
+                placeholder="1000"
+                className="mt-2 bg-slate-800 border-slate-700 text-white"
+                required
+              />
+            </div>
+
+            <div>
+              <Label className="text-white">Unidade</Label> {/* New field */}
+              <Select value={formData.unit} onValueChange={(v) => setFormData({...formData, unit: v})}>
+                <SelectTrigger className="mt-2 bg-slate-800 border-slate-700 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-slate-700">
+                  <SelectItem value="BRL">R$ (Reais)</SelectItem>
+                  <SelectItem value="%">% (Porcentagem)</SelectItem>
+                  <SelectItem value="bets">Apostas</SelectItem>
+                  <SelectItem value="days">Dias</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label className="text-white">Data Início</Label>
+              <Input
+                type="date"
+                value={formData.start_date}
+                onChange={(e) => setFormData({...formData, start_date: e.target.value})}
+                className="mt-2 bg-slate-800 border-slate-700 text-white"
+              />
+            </div>
+
+            <div>
+              <Label className="text-white">Data Fim *</Label>
+              <Input
+                type="date"
+                value={formData.end_date}
+                onChange={(e) => setFormData({...formData, end_date: e.target.value})}
+                className="mt-2 bg-slate-800 border-slate-700 text-white"
+                required
+              />
+            </div>
+          </div>
+
+          {goal && (
+            <div>
+              <Label className="text-white">Status</Label>
+              <Select value={formData.status} onValueChange={(v) => setFormData({...formData, status: v})}>
+                <SelectTrigger className="mt-2 bg-slate-800 border-slate-700 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-slate-700">
+                  <SelectItem value="active">🔵 Ativa</SelectItem>
+                  <SelectItem value="completed">✅ Concluída</SelectItem> {/* Changed 'achieved' to 'completed' */}
+                  <SelectItem value="paused">⏸️ Pausada</SelectItem>
+                  <SelectItem value="cancelled">❌ Cancelada</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          <div className="flex justify-between pt-4">
+            {goal && (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => {
+                  if (confirm('Deletar esta meta?')) {
+                    onDelete(goal.id);
+                    onClose();
+                  }
+                }}
+              >
+                Deletar
+              </Button>
+            )}
+            
+            <div className="flex gap-3 ml-auto">
+              <Button type="button" variant="outline" onClick={onClose} className="bg-slate-800 border-slate-700 text-white">
+                Cancelar
+              </Button>
+              <Button type="submit" className="bg-orange-600 hover:bg-orange-700">
+                {goal ? 'Atualizar' : 'Criar Meta'}
+              </Button>
+            </div>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AISuggestionsModal({ open, onClose, suggestions, onAccept }) {
+  if (!suggestions) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-slate-900 border-slate-700">
+        <DialogHeader>
+          <DialogTitle className="text-white flex items-center gap-2">
+            <Brain className="w-6 h-6 text-purple-400" />
+            Metas Sugeridas pela IA
+          </DialogTitle>
+          <p className="text-slate-400 text-sm mt-2">
+            {suggestions.motivational_message}
+          </p>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {suggestions.suggested_goals?.map((suggestion, idx) => (
+            <Card key={idx} className="bg-gradient-to-br from-slate-800/50 to-slate-900/50 border-slate-700">
+              <CardContent className="p-6">
+                <div className="flex items-start justify-between gap-4 mb-4">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-2">
+                      <h3 className="text-white font-bold text-lg">{suggestion.title}</h3>
+                      <Badge className={
+                        suggestion.difficulty === 'legendary' ? 'bg-yellow-600' :
+                        suggestion.difficulty === 'expert' ? 'bg-purple-600' :
+                        suggestion.difficulty === 'advanced' ? 'bg-blue-600' :
+                        'bg-green-600'
+                      }>
+                        {suggestion.difficulty}
+                      </Badge>
+                      <Badge className="bg-purple-600">
+                        <Sparkles className="w-3 h-3 mr-1" />
+                        {suggestion.ai_confidence_score}% confiança
+                      </Badge>
+                    </div>
+                    <p className="text-slate-300 text-sm mb-3">{suggestion.description}</p>
+                    
+                    <div className="grid grid-cols-2 gap-3 mb-3">
+                      <div className="p-3 bg-slate-900/50 rounded-lg">
+                        <p className="text-slate-400 text-xs mb-1">Meta</p>
+                        <p className="text-white font-bold">
+                          {suggestion.target_value} {suggestion.unit}
+                        </p>
+                      </div>
+                      <div className="p-3 bg-slate-900/50 rounded-lg">
+                        <p className="text-slate-400 text-xs mb-1">Prazo</p>
+                        <p className="text-white font-bold">
+                          {suggestion.timeframe_days} dias
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="p-3 bg-blue-900/20 border border-blue-700 rounded-lg mb-3">
+                      <p className="text-blue-200 text-xs font-semibold mb-1">
+                        💡 Por que esta meta?
+                      </p>
+                      <p className="text-blue-300 text-xs">{suggestion.reasoning}</p>
+                    </div>
+
+                    {suggestion.steps && suggestion.steps.length > 0 && (
+                      <div className="space-y-2">
+                        <p className="text-slate-400 text-xs font-semibold">Etapas:</p>
+                        {suggestion.steps.slice(0, 3).map((step, stepIdx) => (
+                          <div key={stepIdx} className="flex items-start gap-2">
+                            <span className="text-purple-400 text-xs">#{stepIdx + 1}</span>
+                            <p className="text-slate-300 text-xs flex-1">{step.title}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="text-right">
+                    <div className="w-20 h-20 bg-gradient-to-br from-purple-600 to-pink-600 rounded-full flex items-center justify-center mb-2">
+                      <Trophy className="w-10 h-10 text-white" />
+                    </div>
+                    <p className="text-yellow-400 font-bold text-sm">
+                      +{suggestion.reward_points} XP
+                    </p>
+                  </div>
+                </div>
+
+                <Button
+                  onClick={() => onAccept(suggestion)}
+                  className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+                >
+                  <Zap className="w-4 h-4 mr-2" />
+                  Aceitar Esta Meta
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
