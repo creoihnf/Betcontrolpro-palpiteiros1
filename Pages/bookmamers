@@ -1,0 +1,286 @@
+import React, { useState, useEffect } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { PlusCircle, Building2, Edit, Trash2, RefreshCw } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "sonner";
+
+export default function Bookmakers() {
+  const queryClient = useQueryClient();
+  const [showDialog, setShowDialog] = useState(false);
+  const [editingBookmaker, setEditingBookmaker] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [formData, setFormData] = useState({
+    name: '',
+    website: '',
+    is_active: true
+  });
+
+  useEffect(() => {
+    loadUser();
+  }, []);
+
+  const loadUser = async () => {
+    try {
+      const user = await base44.auth.me();
+      console.log('👤 [BOOKMAKERS] Usuário autenticado:', user?.email);
+      setCurrentUser(user);
+    } catch (error) {
+      console.error('❌ [BOOKMAKERS] Erro ao carregar usuário:', error);
+    }
+  };
+
+  const { data: bookmakers = [], isLoading: loadingBookmakers, refetch } = useQuery({
+    queryKey: ['bookmakers', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser?.email) {
+        console.log('⚠️ [BOOKMAKERS] Sem usuário, retornando vazio');
+        return [];
+      }
+      
+      console.log('🔍 [BOOKMAKERS] Buscando casas para:', currentUser.email);
+      
+      try {
+        const startTime = performance.now();
+        
+        // Buscar TODAS as casas ativas (tanto do sistema quanto do usuário)
+        const data = await base44.entities.Bookmaker.list('name', 1000);
+        
+        const endTime = performance.now();
+        
+        console.log(`✅ [BOOKMAKERS] Casas carregadas em ${(endTime - startTime).toFixed(2)}ms:`, data?.length || 0);
+        console.log('📋 [BOOKMAKERS] Primeiras 10 casas:', data?.slice(0, 10).map(b => b.name));
+        
+        if (!data || data.length === 0) {
+          console.warn('⚠️ [BOOKMAKERS] NENHUMA CASA RETORNADA! Possível problema de RLS.');
+        }
+        
+        return Array.isArray(data) ? data : [];
+        
+      } catch (error) {
+        console.error('❌ [BOOKMAKERS] Erro ao buscar:', error);
+        toast.error('Erro ao carregar casas: ' + error.message);
+        return [];
+      }
+    },
+    enabled: !!currentUser?.email,
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: 2
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data) => base44.entities.Bookmaker.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['bookmakers']);
+      toast.success('✅ Casa criada!');
+      setShowDialog(false);
+      setFormData({ name: '', website: '', is_active: true });
+    },
+    onError: (error) => {
+      toast.error('❌ Erro ao criar: ' + error.message);
+    }
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }) => base44.entities.Bookmaker.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['bookmakers']);
+      toast.success('✅ Casa atualizada!');
+      setShowDialog(false);
+      setEditingBookmaker(null);
+    },
+    onError: (error) => {
+      toast.error('❌ Erro ao atualizar: ' + error.message);
+    }
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id) => base44.entities.Bookmaker.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['bookmakers']);
+      toast.success('✅ Casa excluída!');
+    },
+    onError: (error) => {
+      toast.error('❌ Erro ao excluir: ' + error.message);
+    }
+  });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (editingBookmaker) {
+      updateMutation.mutate({ id: editingBookmaker.id, data: formData });
+    } else {
+      createMutation.mutate(formData);
+    }
+  };
+
+  const handleRefresh = () => {
+    console.log('🔄 [BOOKMAKERS] Refresh manual iniciado');
+    refetch();
+    toast.info('🔄 Atualizando casas...');
+  };
+
+  return (
+    <div className="w-full min-h-screen bg-slate-900 p-4 md:p-8">
+      <div className="w-full max-w-7xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-white">Casas de Apostas</h1>
+            <p className="text-slate-400 mt-2">
+              {loadingBookmakers ? 'Carregando...' : `${bookmakers.length} casas disponíveis`}
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <Button variant="outline" onClick={handleRefresh} disabled={loadingBookmakers}>
+              <RefreshCw className={`w-5 h-5 mr-2 ${loadingBookmakers ? 'animate-spin' : ''}`} />
+              Atualizar
+            </Button>
+            <Button onClick={() => { 
+              setEditingBookmaker(null); 
+              setFormData({ name: '', website: '', is_active: true });
+              setShowDialog(true); 
+            }}>
+              <PlusCircle className="w-5 h-5 mr-2" />
+              Nova Casa
+            </Button>
+          </div>
+        </div>
+
+        {loadingBookmakers ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {[1,2,3,4,5,6].map(i => (
+              <Skeleton key={i} className="h-40 bg-slate-700 rounded-lg" />
+            ))}
+          </div>
+        ) : bookmakers.length === 0 ? (
+          <Card className="p-12 text-center bg-slate-800 border-slate-700">
+            <Building2 className="w-16 h-16 mx-auto mb-4 text-slate-500" />
+            <h3 className="text-xl font-bold mb-2 text-white">
+              ⚠️ Nenhuma casa encontrada
+            </h3>
+            <p className="text-slate-400 mb-4">
+              Isso pode indicar um problema de permissões ou as casas foram deletadas.
+            </p>
+            <div className="flex gap-3 justify-center">
+              <Button variant="outline" onClick={handleRefresh}>
+                <RefreshCw className="w-5 h-5 mr-2" />
+                Tentar Novamente
+              </Button>
+              <Button onClick={() => setShowDialog(true)}>
+                <PlusCircle className="w-5 h-5 mr-2" />
+                Adicionar Casa
+              </Button>
+            </div>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            {bookmakers.map(bookmaker => (
+              <Card key={bookmaker.id} className="bg-slate-800 border-slate-700 hover:border-slate-600 transition-all">
+                <CardHeader>
+                  <CardTitle className="flex items-center justify-between text-white">
+                    <span className="flex items-center gap-2 truncate">
+                      <Building2 className="w-5 h-5 flex-shrink-0" />
+                      <span className="truncate">{bookmaker.name}</span>
+                    </span>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-8 w-8"
+                        onClick={() => { 
+                          setEditingBookmaker(bookmaker); 
+                          setFormData(bookmaker); 
+                          setShowDialog(true); 
+                        }}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="icon"
+                        className="h-8 w-8 text-red-400 hover:text-red-300"
+                        onClick={() => {
+                          if (confirm(`Excluir ${bookmaker.name}?`)) {
+                            deleteMutation.mutate(bookmaker.id);
+                          }
+                        }}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </CardTitle>
+                </CardHeader>
+                {bookmaker.website && (
+                  <CardContent>
+                    <a 
+                      href={bookmaker.website} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="text-sm text-blue-400 hover:text-blue-300 truncate block"
+                    >
+                      {bookmaker.website}
+                    </a>
+                  </CardContent>
+                )}
+              </Card>
+            ))}
+          </div>
+        )}
+
+        <Dialog open={showDialog} onOpenChange={setShowDialog}>
+          <DialogContent className="bg-slate-900 border-slate-700">
+            <DialogHeader>
+              <DialogTitle className="text-white">
+                {editingBookmaker ? 'Editar' : 'Nova'} Casa de Apostas
+              </DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <Label className="text-slate-300">Nome *</Label>
+                <Input
+                  value={formData.name}
+                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+                  required
+                  placeholder="Ex: Bet365"
+                  className="bg-slate-800 border-slate-700 text-white"
+                />
+              </div>
+              <div>
+                <Label className="text-slate-300">Website</Label>
+                <Input
+                  type="url"
+                  value={formData.website || ''}
+                  onChange={(e) => setFormData({...formData, website: e.target.value})}
+                  placeholder="https://exemplo.com"
+                  className="bg-slate-800 border-slate-700 text-white"
+                />
+              </div>
+              <div className="flex justify-end gap-3">
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  onClick={() => {
+                    setShowDialog(false);
+                    setEditingBookmaker(null);
+                  }}
+                >
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={createMutation.isLoading || updateMutation.isLoading}>
+                  {editingBookmaker ? 'Atualizar' : 'Criar'}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
+    </div>
+  );
+}
