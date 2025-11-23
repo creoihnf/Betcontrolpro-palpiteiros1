@@ -1,0 +1,1763 @@
+import React, { useState, useMemo } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocation, useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Plus, Sparkles, WifiOff, DollarSign, TrendingUp, Target, RefreshCw, AlertTriangle, Home } from "lucide-react";
+import { toast } from "sonner";
+import BetDetailModal from "../components/bets/BetDetailModal";
+import AIUploadDialog from "../components/bets/AIUploadDialog";
+import EditBetDialog from '../components/bets/EditBetDialog';
+import FreebetBonusDialog from '../components/bets/FreebetBonusDialog';
+import { createPageUrl } from "@/utils";
+import RealtimeBetCard from '../components/realtime/RealtimeBetCard';
+import ProfitCard from '../components/bets/ProfitCard';
+import QuickProfitModal from '../components/dashboard/QuickProfitModal';
+import { motion } from "framer-motion";
+import useRealtimeSync from "../components/utils/useRealtimeSync";
+import GlobalErrorBoundary from '../components/utils/GlobalErrorBoundary';
+
+/**
+ * StatCard component
+ */
+const StatCard = ({ title, value, subtitle, icon: Icon, type }) => {
+  let bgColor = 'bg-slate-800/50';
+  let textColor = 'text-white';
+  let iconColor = 'text-slate-400';
+  let accentGradient = 'linear-gradient(180deg, #6b7280 0%, #9ca3af 100%)';
+  let shadowColor = 'rgba(156, 163, 175, 0.4)';
+
+  if (type === 'profit') {
+    bgColor = 'bg-emerald-900/30';
+    textColor = 'text-emerald-300';
+    iconColor = 'text-emerald-400';
+    accentGradient = 'linear-gradient(180deg, #10b981 0%, #34d399 100%)';
+    shadowColor = 'rgba(16, 185, 129, 0.4)';
+  } else if (type === 'loss') {
+    bgColor = 'bg-red-900/30';
+    textColor = 'text-red-300';
+    iconColor = 'text-red-400';
+    accentGradient = 'linear-gradient(180deg, #ef4444 0%, #f87171 100%)';
+    shadowColor = 'rgba(239, 68, 68, 0.4)';
+  } else if (type === 'pending') {
+    bgColor = 'bg-slate-800/50';
+    textColor = 'text-slate-400';
+    iconColor = 'text-slate-500';
+    accentGradient = 'linear-gradient(180deg, #6b7280 0%, #9ca3af 100%)';
+    shadowColor = 'rgba(156, 163, 175, 0.4)';
+  } else if (type === 'blue') {
+    bgColor = 'bg-blue-900/30';
+    textColor = 'text-blue-300';
+    iconColor = 'text-blue-400';
+    accentGradient = 'linear-gradient(180deg, #3b82f6 0%, #60a5fa 100%)';
+    shadowColor = 'rgba(59, 130, 246, 0.4)';
+  }
+
+  return (
+    <Card className={`${bgColor} border-slate-700 relative overflow-hidden`}>
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '6px',
+        height: '100%',
+        background: accentGradient,
+        borderRadius: '3px',
+        boxShadow: `0 0 12px ${shadowColor}`
+      }} />
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 pl-6">
+        <CardTitle className={`text-sm font-medium ${textColor}`}>
+          {title}
+        </CardTitle>
+        {Icon && <Icon className={`h-4 w-4 ${iconColor}`} />}
+      </CardHeader>
+      <CardContent className="pl-6">
+        <div className={`text-2xl font-bold ${textColor}`}>
+          {value}
+        </div>
+        {subtitle && (
+          <p className="text-xs text-slate-400 mt-1">
+            {subtitle}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+/**
+ * ✅ BOTÃO $ DRAGGABLE FLUTUANTE - MOBILE + DESKTOP
+ */
+const DraggableQuickProfitButton = ({ onClick }) => {
+  const getDefaultPosition = () => {
+    const sidebarWidth = 256;
+    const buttonSize = 60;
+    const margin = 20;
+    return {
+      x: window.innerWidth - buttonSize - margin,
+      y: window.innerHeight - buttonSize - margin
+    };
+  };
+
+  const [position, setPosition] = useState(() => {
+    const saved = localStorage.getItem('quickProfitButtonPosition');
+    if (saved) {
+      const savedPos = JSON.parse(saved);
+      if (savedPos.x > 0 && savedPos.x < window.innerWidth - 60 &&
+          savedPos.y > 0 && savedPos.y < window.innerHeight - 60) {
+        return savedPos;
+      }
+    }
+    return getDefaultPosition();
+  });
+
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+  const handleStart = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+    const clientX = e.type === 'touchstart' ? e.touches[0].clientX : e.clientX;
+    const clientY = e.type === 'touchstart' ? e.touches[0].clientY : e.clientY;
+    setDragStart({
+      x: clientX - position.x,
+      y: clientY - position.y
+    });
+  };
+
+  const handleMove = (e) => {
+    if (!isDragging) return;
+    e.preventDefault();
+    const clientX = e.type === 'touchmove' ? e.touches[0].clientX : e.clientX;
+    const clientY = e.type === 'touchmove' ? e.touches[0].clientY : e.clientY;
+    const sidebarWidth = window.innerWidth < 768 ? 0 : 256;
+    const minX = sidebarWidth + 10;
+    const maxX = window.innerWidth - 60;
+    const maxY = window.innerHeight - 60;
+    const newX = Math.max(minX, Math.min(maxX, clientX - dragStart.x));
+    const newY = Math.max(0, Math.min(maxY, clientY - dragStart.y));
+    setPosition({ x: newX, y: newY });
+  };
+
+  const handleEnd = () => {
+    if (isDragging) {
+      setIsDragging(false);
+      localStorage.setItem('quickProfitButtonPosition', JSON.stringify(position));
+    }
+  };
+
+  const handleClick = (e) => {
+    if (!isDragging) {
+      e.stopPropagation();
+      onClick();
+    }
+  };
+
+  React.useEffect(() => {
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMove);
+      document.addEventListener('mouseup', handleEnd);
+      document.addEventListener('touchmove', handleMove, { passive: false });
+      document.addEventListener('touchend', handleEnd);
+      return () => {
+        document.removeEventListener('mousemove', handleMove);
+        document.removeEventListener('mouseup', handleEnd);
+        document.removeEventListener('touchmove', handleMove);
+        document.removeEventListener('touchend', handleEnd);
+      };
+    }
+  }, [isDragging, dragStart, position]);
+
+  React.useEffect(() => {
+    const handleResize = () => {
+      const maxX = window.innerWidth - 60;
+      const maxY = window.innerHeight - 60;
+      const sidebarWidth = window.innerWidth < 768 ? 0 : 256;
+      if (position.x > maxX || position.y > maxY || position.x < sidebarWidth) {
+        const newPos = getDefaultPosition();
+        setPosition(newPos);
+        localStorage.setItem('quickProfitButtonPosition', JSON.stringify(newPos));
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [position]);
+
+  return (
+    <div
+      onMouseDown={handleStart}
+      onTouchStart={handleStart}
+      onClick={handleClick}
+      style={{
+        position: 'fixed',
+        left: `${position.x}px`,
+        top: `${position.y}px`,
+        zIndex: 9998,
+        cursor: isDragging ? 'grabbing' : 'grab',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        touchAction: 'none',
+        WebkitTouchCallout: 'none'
+      }}
+    >
+      <div style={{
+        width: '60px',
+        height: '60px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'transparent',
+        transition: isDragging ? 'none' : 'transform 0.2s ease',
+        transform: isDragging ? 'scale(1.1)' : 'scale(1)'
+      }}>
+        <div style={{
+          fontSize: '36px',
+          fontWeight: 'bold',
+          color: '#d4af37',
+          textShadow: `
+            0 0 10px rgba(212, 175, 55, 0.8),
+            0 0 20px rgba(212, 175, 55, 0.6),
+            0 0 30px rgba(212, 175, 55, 0.4)
+          `,
+          filter: 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.5))',
+          animation: 'pulse 2s ease-in-out infinite',
+          pointerEvents: 'none'
+        }}>
+          $
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * 📊 MINHAS APOSTAS - PÁGINA PRINCIPAL
+ */
+export default function BetsPage() {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const [currentUser, setCurrentUser] = useState(null);
+  const [userLoading, setUserLoading] = useState(true);
+  const [selectedBet, setSelectedBet] = useState(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [aiUploadOpen, setAiUploadOpen] = useState(false);
+  const [editBetOpen, setEditBetOpen] = useState(false);
+  const [betToEdit, setBetToEdit] = useState(null);
+  const [freebetDialogOpen, setFreebetDialogOpen] = useState(false);
+  const [freebetBet, setFreebetBet] = useState(null);
+  const [freebetAccounts, setFreebetAccounts] = useState([]);
+  const [editingProfit, setEditingProfit] = useState(null);
+  const [showQuickProfitModal, setShowQuickProfitModal] = useState(false);
+
+  const urlParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+
+  const [filters, setFilters] = useState({
+    procedureTypes: [], // Array de tipos de procedimento selecionados
+    walletIds: [], // Array de IDs de contas selecionadas
+    search: '',
+    dateFrom: '',
+    dateTo: '',
+    minStake: ''
+  });
+
+  const [sortOrder, setSortOrder] = useState('desc');
+
+  React.useEffect(() => {
+    const loadUser = async () => {
+      try {
+        setUserLoading(true);
+        const user = await base44.auth.me();
+        setCurrentUser(user);
+      } catch (error) {
+        console.error('❌ [BETS] Erro ao carregar usuário:', error);
+        setCurrentUser(null);
+      } finally {
+        setUserLoading(false);
+      }
+    };
+    loadUser();
+  }, []);
+
+  const { sync, isOnline: realtimeOnline, lastSync } = useRealtimeSync({
+    entities: ['bets', 'profit-records', 'wallets', 'bookmakers'],
+    onUpdate: (entity, data) => {
+      console.log('🔄 [REALTIME] Atualização recebida:', entity);
+      if (entity === 'bets') {
+        queryClient.invalidateQueries(['bets']);
+        queryClient.invalidateQueries(['dashboard-bets']);
+        queryClient.invalidateQueries(['analytics-bets']);
+      } else if (entity === 'profit-records') {
+        queryClient.invalidateQueries(['profit-records']);
+        queryClient.invalidateQueries(['dashboard-profit-records']);
+      } else if (entity === 'wallets') {
+        queryClient.invalidateQueries(['wallets']);
+        queryClient.invalidateQueries(['dashboard-wallets']);
+      } else if (entity === 'bookmakers') {
+        queryClient.invalidateQueries(['bookmakers']);
+      }
+      toast.info(`🔄 Dados de ${entity} atualizados em tempo real!`);
+    },
+    enabled: true,
+    showToasts: false
+  });
+
+  const { data: bets = [], refetch: refetchBets, isLoading: betsLoading } = useQuery({
+    queryKey: ['bets', currentUser?.email],
+    queryFn: async () => {
+      console.log('📥 [QUERY-BETS] Iniciando busca...');
+      if (!currentUser?.email) {
+        console.warn('⚠️ [QUERY-BETS] currentUser não existe');
+        return [];
+      }
+      const startTime = Date.now();
+      const data = await base44.entities.Bet.filter({
+        created_by: currentUser.email
+      }, '-event_date');
+      const endTime = Date.now();
+      console.log('✅ [QUERY-BETS] Carregadas:', {
+        total: data.length,
+        pendentes: data.filter(b => b.status === 'pendente').length,
+        finalizadas: data.filter(b => ['green', 'perda', 'bateu_protecao'].includes(b.status)).length,
+        tempo: `${endTime - startTime}ms`
+      });
+      return data;
+    },
+    enabled: !!currentUser?.email,
+    staleTime: 0, // ✅ SEMPRE FRESH - Atualização instantânea
+    gcTime: 5 * 60 * 1000,
+    refetchOnMount: false, // ✅ Evita loops automáticos
+    refetchOnWindowFocus: false,
+  });
+
+  const { data: profitRecords = [], refetch: refetchProfitRecords, isLoading: profitsLoading } = useQuery({
+    queryKey: ['profit-records', currentUser?.email],
+    queryFn: async () => {
+      console.log('📥 [QUERY-PROFITS] Iniciando busca...');
+      if (!currentUser?.email) {
+        console.warn('⚠️ [QUERY-PROFITS] currentUser não existe');
+        return [];
+      }
+      const startTime = Date.now();
+      const data = await base44.entities.ProfitRecord.filter({
+        created_by: currentUser.email
+      }, '-record_date');
+      const endTime = Date.now();
+      console.log('✅ [QUERY-PROFITS] Carregados:', {
+        total: data.length,
+        valor_total: data.reduce((sum, p) => sum + (p.amount || 0), 0).toFixed(2),
+        tempo: `${endTime - startTime}ms`
+      });
+      return data;
+    },
+    enabled: !!currentUser?.email,
+    staleTime: 2 * 60 * 1000,
+    cacheTime: 5 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const { data: wallets = [], refetch: refetchWallets, isLoading: walletsLoading } = useQuery({
+    queryKey: ['wallets', currentUser?.email],
+    queryFn: async () => {
+      console.log('📥 [QUERY-WALLETS] Iniciando busca...');
+      if (!currentUser?.email) {
+        console.warn('⚠️ [QUERY-WALLETS] currentUser não existe');
+        return [];
+      }
+      const startTime = Date.now();
+      const data = await base44.entities.Wallet.filter({
+        created_by: currentUser.email
+      });
+      const endTime = Date.now();
+
+      let totalFromBookmakers = 0;
+      data.forEach(wallet => {
+        if (wallet.is_active !== false) {
+          const balances = wallet.bookmaker_balances || {};
+          Object.values(balances).forEach(balance => {
+            totalFromBookmakers += parseFloat(balance) || 0;
+          });
+        }
+      });
+
+      console.log('✅ [QUERY-WALLETS] Carregadas:', {
+        total: data.length,
+        saldo_bookmaker_balances: totalFromBookmakers.toFixed(2),
+        saldo_current_balance: data.reduce((sum, w) => sum + (w.current_balance || 0), 0).toFixed(2),
+        tempo: `${endTime - startTime}ms`
+      });
+      return data;
+    },
+    enabled: !!currentUser?.email,
+    staleTime: 0, // ✅ SEMPRE FRESH - Saldo atualiza instantaneamente
+    gcTime: 5 * 60 * 1000,
+    refetchOnMount: false, // ✅ Evita loops automáticos
+    refetchOnWindowFocus: false,
+  });
+
+  const { data: bookmakers = [], refetch: refetchBookmakers, isLoading: bookmakersLoading } = useQuery({
+    queryKey: ['bookmakers'],
+    queryFn: async () => {
+      console.log('📥 [QUERY-BOOKMAKERS] Iniciando busca...');
+      const startTime = Date.now();
+      const data = await base44.entities.Bookmaker.list();
+      const endTime = Date.now();
+      console.log('✅ [QUERY-BOOKMAKERS] Carregadas:', {
+        total: data?.length || 0,
+        ativas: data?.filter(b => b.is_active).length || 0,
+        tempo: `${endTime - startTime}ms`
+      });
+      return Array.isArray(data) ? data : [];
+    },
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    keepPreviousData: true
+  });
+
+  const handleManualRefresh = async () => {
+    console.log('🔄 [BETS] Atualização manual iniciada');
+    await Promise.all([
+      refetchBets(),
+      refetchWallets(),
+      refetchBookmakers(),
+      refetchProfitRecords()
+    ]);
+    console.log('✅ [BETS] Atualização manual completa');
+    toast.success('✅ Apostas e Lucros atualizados!');
+  };
+
+  const updateBetStatus = async (betId, newStatus) => {
+    if (!navigator.onLine) {
+      toast.warning('📡 Offline');
+      return;
+    }
+
+    console.log('🔄 [BETS] Atualizando status INSTANTANEAMENTE:', { betId, newStatus });
+
+    const betToUpdate = bets.find(b => b.id === betId);
+    if (!betToUpdate) {
+      console.error('❌ [BETS] Aposta não encontrada:', betId);
+      return;
+    }
+
+    queryClient.setQueryData(['bets', currentUser?.email], (oldBets = []) => {
+      return oldBets.map(bet =>
+        bet.id === betId ? { ...bet, status: newStatus } : bet
+      );
+    });
+
+    toast.success('✅ Status atualizado!', { duration: 1500 });
+
+    try {
+      let profitLoss = 0;
+      const stake = parseFloat(betToUpdate.stake) || 0;
+      const odds = parseFloat(betToUpdate.odds) || 1;
+      const bookmaker_id = betToUpdate.bookmaker_id;
+      const wallet_id = betToUpdate.wallet_id;
+
+      console.log('💰 [SALDO] Dados da aposta:', {
+        betId,
+        newStatus,
+        stake,
+        odds,
+        bookmaker_id,
+        wallet_id
+      });
+
+      if (newStatus === 'green' || newStatus === 'duplo_green' || newStatus === 'triplo_green') {
+        const winReturn = stake * odds;
+        profitLoss = winReturn - stake;
+        console.log('✅ [GREEN] Retorno:', winReturn, 'Lucro:', profitLoss);
+      } else if (newStatus === 'perda') {
+        profitLoss = -stake;
+        console.log('❌ [PERDA] Prejuízo:', profitLoss);
+      } else if (newStatus === 'bateu_protecao') {
+        const protections = betToUpdate.protection_bookmakers || [];
+        let protectionWinReturn = 0;
+        protections.forEach(p => {
+          const pStake = parseFloat(p.stake) || 0;
+          const pOdds = parseFloat(p.odds) || 1;
+          protectionWinReturn += pStake * pOdds;
+        });
+        profitLoss = protectionWinReturn - stake;
+        console.log('🛡️ [PROTEÇÃO] Retorno proteção:', protectionWinReturn, 'Lucro:', profitLoss);
+      } else if (newStatus === 'cancelada') {
+        profitLoss = 0;
+        console.log('🚫 [CANCELADA] Sem lucro/perda');
+      }
+
+      if (wallet_id && bookmaker_id && (newStatus === 'green' || newStatus === 'duplo_green' || newStatus === 'triplo_green' || newStatus === 'perda' || newStatus === 'bateu_protecao')) {
+        const wallet = wallets.find(w => w.id === wallet_id);
+        if (wallet) {
+          console.log('💳 [WALLET] Antes:', {
+            wallet_id,
+            bookmaker_id,
+            bookmaker_balances: wallet.bookmaker_balances
+          });
+
+          const currentBalances = wallet.bookmaker_balances || {};
+          const currentBalance = parseFloat(currentBalances[bookmaker_id]) || 0;
+
+          let newBalance = currentBalance;
+          if (newStatus === 'green' || newStatus === 'duplo_green' || newStatus === 'triplo_green') {
+            newBalance = currentBalance + (stake * odds);
+          } else if (newStatus === 'perda') {
+            newBalance = currentBalance - stake;
+          } else if (newStatus === 'bateu_protecao') {
+            const protections = betToUpdate.protection_bookmakers || [];
+            protections.forEach(p => {
+              const pStake = parseFloat(p.stake) || 0;
+              const pOdds = parseFloat(p.odds) || 1;
+              newBalance += pStake * pOdds;
+            });
+          }
+
+          console.log('💰 [SALDO] Cálculo:', {
+            currentBalance,
+            newBalance,
+            diferenca: newBalance - currentBalance
+          });
+
+          const updatedBalances = {
+            ...currentBalances,
+            [bookmaker_id]: newBalance
+          };
+
+          console.log('💳 [WALLET] Atualizando:', {
+            wallet_id,
+            updatedBalances
+          });
+
+          const updateResult = await base44.entities.Wallet.update(wallet_id, {
+            bookmaker_balances: updatedBalances
+          });
+
+          console.log('✅ [WALLET] Update result:', updateResult);
+
+          const updatedWallet = await base44.entities.Wallet.filter({ id: wallet_id });
+          console.log('🔍 [WALLET] Depois do update:', {
+            wallet_id,
+            bookmaker_balances: updatedWallet[0]?.bookmaker_balances
+          });
+        } else {
+          console.warn('⚠️ [WALLET] Wallet não encontrada:', wallet_id);
+        }
+      }
+
+      if (betToUpdate?.is_freebet_procedure && newStatus === 'perda') {
+        setFreebetBet(betToUpdate);
+        const accounts = [];
+        if (betToUpdate.wallet_id) {
+          const wallet = wallets.find(w => w.id === betToUpdate.wallet_id);
+          if (wallet && !accounts.some(a => a.id === wallet.id)) {
+            accounts.push({
+              id: wallet.id,
+              name: wallet.is_main_account ? 'Principal' : wallet.name
+            });
+          }
+        }
+        (betToUpdate.protection_bookmakers || []).forEach(p => {
+          if (p.wallet_id && !accounts.some(a => a.id === p.wallet_id)) {
+            const wallet = wallets.find(w => w.id === p.wallet_id);
+            if (wallet) {
+              accounts.push({
+                id: wallet.id,
+                name: wallet.is_main_account ? 'Principal' : wallet.name
+              });
+            }
+          }
+        });
+        setFreebetAccounts(accounts);
+        setFreebetDialogOpen(true);
+      }
+
+      await base44.entities.Bet.update(betId, {
+        status: newStatus,
+        profit_loss: profitLoss
+      });
+
+      console.log('✅ [BETS] Aposta atualizada:', { betId, status: newStatus, profit_loss: profitLoss });
+
+      // ✅ INVALIDAR + REFETCH MANUAL para atualização INSTANTÂNEA
+      queryClient.invalidateQueries({ queryKey: ['bets'] });
+      queryClient.invalidateQueries({ queryKey: ['wallets'] });
+
+      // ✅ REFETCH IMEDIATO (sem await para não bloquear UI)
+      refetchBets();
+      refetchWallets();
+
+      console.log('✅ [BETS] Sincronização completa - Dashboard deve atualizar agora!');
+
+    } catch (error) {
+      console.error('❌ [BETS] Erro ao atualizar status:', error);
+      console.error('❌ [BETS] Stack trace:', error.stack);
+
+      // Invalidar para forçar refetch e revert
+      queryClient.invalidateQueries({ queryKey: ['bets'] });
+      queryClient.invalidateQueries({ queryKey: ['wallets'] });
+
+      toast.error('❌ Erro ao atualizar status', {
+        description: 'A aposta foi revertida ao status anterior'
+      });
+    }
+  };
+
+  const handleAISave = async (operationData) => {
+    if (!navigator.onLine) {
+      toast.warning('📡 Offline');
+      return;
+    }
+    if (!currentUser) {
+      toast.error('❌ Não autenticado');
+      return;
+    }
+    const loadingToast = toast.loading('Criando operação completa...');
+    try {
+      console.log('🤖 [AI] Processando operação:', operationData);
+      const { main, protections = [] } = operationData;
+      if (!main) {
+        toast.error('❌ Sem aposta principal', { id: loadingToast });
+        return;
+      }
+
+      let mainBookmakerId = main.bookmaker_id;
+      let mainBookmakerName = main.bookmaker_name;
+
+      if (!mainBookmakerId && main.bookmaker_name) {
+        let bookmaker = bookmakers.find(b =>
+          b.name.toLowerCase().trim() === main.bookmaker_name.toLowerCase().trim()
+        );
+        if (!bookmaker) {
+          console.log('🏠 [AI] Criando nova casa:', main.bookmaker_name);
+          const newBookmaker = await base44.entities.Bookmaker.create({
+            name: main.bookmaker_name,
+            is_active: true,
+            is_system_bookmaker: false,
+            created_by: currentUser.email
+          });
+          mainBookmakerId = newBookmaker.id;
+          mainBookmakerName = newBookmaker.name;
+          queryClient.setQueryData(['bookmakers'], (old = []) => {
+            const exists = old.some(b => b.id === newBookmaker.id);
+            if (exists) return old;
+            return [...old, newBookmaker].sort((a, b) =>
+              (a.name || '').localeCompare(b.name || '')
+            );
+          });
+        } else {
+          mainBookmakerId = bookmaker.id;
+          mainBookmakerName = bookmaker.name;
+        }
+      }
+
+      const protectionBookmakersData = [];
+      for (const [index, protection] of protections.entries()) {
+        if (!protection.bookmaker_name && !protection.bookmaker_id) {
+          console.warn(`⚠️ [AI] Proteção ${index + 1} sem casa ou ID - pulando`);
+          continue;
+        }
+        console.log(`🛡️ [AI] Processando proteção ${index + 1}:`, protection.bookmaker_name || protection.bookmaker_id);
+        let protBookmakerId = protection.bookmaker_id;
+        let protBookmakerName = protection.bookmaker_name;
+        if (!protBookmakerId) {
+          let protBookmaker = bookmakers.find(b =>
+            b.name.toLowerCase().trim() === protection.bookmaker_name.toLowerCase().trim()
+          );
+          if (!protBookmaker) {
+            console.log('🏠 [AI] Criando casa para proteção:', protection.bookmaker_name);
+            const newBookmaker = await base44.entities.Bookmaker.create({
+              name: protection.bookmaker_name,
+              is_active: true,
+              is_system_bookmaker: false,
+              created_by: currentUser.email
+            });
+            protBookmakerId = newBookmaker.id;
+            protBookmakerName = newBookmaker.name;
+            queryClient.setQueryData(['bookmakers'], (old = []) => {
+              const exists = old.some(b => b.id === newBookmaker.id);
+              if (exists) return old;
+              return [...old, newBookmaker].sort((a, b) =>
+                (a.name || '').localeCompare(b.name || '')
+              );
+            });
+          } else {
+            protBookmakerId = protBookmaker.id;
+            protBookmakerName = protBookmaker.name;
+          }
+        }
+        const protectionWalletId = protection.wallet_id;
+        const protWallet = wallets.find(w => w.id === protectionWalletId);
+        const protWalletName = protWallet?.is_main_account
+          ? 'Minha Conta Principal'
+          : protWallet?.name || 'Conta';
+        protectionBookmakersData.push({
+          bookmaker_id: protBookmakerId,
+          name: protBookmakerName,
+          wallet_id: protectionWalletId,
+          wallet_name: protWalletName,
+          market: protection.market || main.market || '',
+          selection: protection.selection || '',
+          stake: parseFloat(protection.stake) || 0,
+          odds: parseFloat(protection.odds) || 0,
+          is_freebet_procedure: protection.is_freebet_procedure || false,
+          status: 'pendente',
+          profit_loss: 0
+        });
+      }
+
+      const allWalletIds = main.all_wallet_ids && main.all_wallet_ids.length > 0 ? main.all_wallet_ids : [main.wallet_id];
+      console.log('📋 [AI] Replicando operação para contas:', allWalletIds);
+
+      for (const walletId of allWalletIds) {
+        const wallet = wallets.find(w => w.id === walletId);
+        const walletName = wallet?.is_main_account
+          ? 'Minha Conta Principal'
+          : wallet?.name || 'Conta';
+        const betData = {
+          event_name: main.event_name || 'Importada via IA',
+          sport: main.sport || 'futebol',
+          event_date: main.event_date || new Date().toISOString(),
+          bookmaker_id: mainBookmakerId,
+          bookmaker_name: mainBookmakerName,
+          wallet_id: walletId,
+          wallet_name: walletName,
+          market: main.market || '',
+          selection: main.selection || '',
+          stake: parseFloat(main.stake) || 0,
+          odds: parseFloat(main.odds) || 0,
+          status: 'pendente',
+          is_freebet_procedure: main.is_freebet_procedure || false,
+          protection_bookmakers: protectionBookmakersData,
+          image_url: main.image_url || '',
+          extracted_by_ai: true,
+          ai_confidence_score: main.confidence || 0,
+          created_by: currentUser.email
+        };
+        console.log('📤 [AI] Criando aposta para:', walletName);
+        await base44.entities.Bet.create(betData);
+      }
+
+      console.log('✅ [AI] Todas as apostas criadas com sucesso!');
+
+      await queryClient.invalidateQueries(['bookmakers']);
+      await queryClient.invalidateQueries(['bets']);
+      await queryClient.invalidateQueries(['dashboard-bets']);
+      await queryClient.invalidateQueries(['analytics-bets']);
+      await queryClient.invalidateQueries(['wallets']);
+      await queryClient.invalidateQueries(['dashboard-wallets']);
+      await queryClient.refetchQueries(['bets']);
+
+      console.log('✅ [AI] Sincronização completa');
+
+      const totalBetsCreated = allWalletIds.length;
+      const totalProtections = protections.length;
+
+      toast.success('✅ Operação criada!', {
+        id: loadingToast,
+        description: `${totalBetsCreated} aposta${totalBetsCreated > 1 ? 's' : ''} principal + ${totalProtections} proteção${totalProtections !== 1 ? 'ões' : 'ão'}`
+      });
+
+      setAiUploadOpen(false);
+
+    } catch (error) {
+      console.error('❌ [AI] Erro ao criar operação:', error);
+      toast.error(`❌ ${error.message}`, { id: loadingToast });
+    }
+  };
+
+  const handleEditBet = (bet) => {
+    setBetToEdit(bet);
+    setEditBetOpen(true);
+  };
+
+  const handleSaveEdit = async (updatedBet) => {
+    if (!navigator.onLine) {
+      toast.warning('📡 Offline');
+      return;
+    }
+    try {
+      console.log('✏️ [EDIT] Salvando edição:', updatedBet.id);
+      await base44.entities.Bet.update(updatedBet.id, updatedBet);
+      await queryClient.invalidateQueries(['bets']);
+      await queryClient.invalidateQueries(['dashboard-bets']);
+      await queryClient.invalidateQueries(['analytics-bets']);
+      await queryClient.refetchQueries(['bets']);
+      console.log('✅ [EDIT] Aposta atualizada');
+      toast.success('✅ Atualizada!');
+      setEditBetOpen(false);
+      setBetToEdit(null);
+    } catch (error) {
+      console.error('❌ [EDIT] Erro ao salvar:', error);
+      toast.error('❌ Erro ao salvar');
+    }
+  };
+
+  const handleSaveFreebetBonus = async (bonusData) => {
+    try {
+      console.log('🎁 [FREEBET] Registrando bônus:', bonusData);
+      if (freebetBet) {
+        await base44.entities.Bet.update(freebetBet.id, {
+          freebet_bonus_registered: true,
+          freebet_bonus_value: bonusData.bonusValue,
+          freebet_bonus_total: bonusData.totalBonus,
+          freebet_bonus_type: bonusData.bonusType,
+          freebet_bonus_notes: bonusData.notes,
+          freebet_bonus_wallet_id: bonusData.walletId
+        });
+        await queryClient.invalidateQueries(['bets']);
+        await queryClient.refetchQueries(['bets']);
+        console.log('✅ [FREEBET] Bônus registrado');
+      }
+      toast.success('✅ Bônus registrado com sucesso!');
+      setFreebetDialogOpen(false);
+      setFreebetBet(null);
+      setFreebetAccounts([]);
+    } catch (error) {
+      console.error('❌ [FREEBET] Erro ao registrar bônus:', error);
+      toast.error('❌ Erro ao registrar bônus');
+    }
+  };
+
+  const handleEditProfit = (profit) => {
+    console.log('✏️ [BETS] Editando ProfitRecord:', profit.id);
+    setEditingProfit(profit);
+    setShowQuickProfitModal(true);
+  };
+
+  const handleDeleteProfit = async (profit) => {
+    if (!confirm(`Deletar lucro de R$ ${profit.amount.toFixed(2)}?`)) return;
+    try {
+      console.log('🗑️ [BETS] Deletando ProfitRecord:', profit.id);
+
+      // ✅ OPTIMISTIC UPDATE: Remover da UI IMEDIATAMENTE
+      queryClient.setQueryData(['profit-records', currentUser?.email], (old) =>
+        old ? old.filter(p => p.id !== profit.id) : []
+      );
+
+      toast.success('✅ Lucro deletado!', { duration: 1500 });
+
+      // ✅ DELETE NO BACKEND
+      await base44.entities.ProfitRecord.delete(profit.id);
+
+      // ✅ INVALIDAR + REFETCH (sem await para não bloquear)
+      queryClient.invalidateQueries({ queryKey: ['profit-records'] });
+      queryClient.invalidateQueries({ queryKey: ['wallets'] });
+      refetchProfitRecords();
+      refetchWallets();
+
+      console.log('✅ [BETS] ProfitRecord deletado com sucesso');
+    } catch (error) {
+      console.error('❌ [BETS] Erro ao deletar:', error);
+
+      // Refetch para reverter optimistic update
+      refetchProfitRecords();
+
+      toast.error('❌ Erro ao deletar lucro', {
+        description: error.message
+      });
+    }
+  };
+
+  const handleSaveProfit = async (profitData) => {
+    try {
+      console.log('💾 [BETS] Salvando ProfitRecord:', profitData);
+      if (profitData.isEditing && profitData.editingProfitId) {
+        const updateData = {
+          title: `Lucro Rápido - ${bookmakers.find(b => b.id === profitData.bookmaker_id)?.name}`,
+          amount: profitData.profit,
+          record_date: profitData.date,
+          bookmaker_id: profitData.bookmaker_id,
+          wallet_id: profitData.account_ids[0],
+          notes: profitData.notes
+        };
+        console.log('✏️ [BETS] Atualizando ProfitRecord:', {
+          id: profitData.editingProfitId,
+          record_date: updateData.record_date,
+          amount: updateData.amount
+        });
+        await base44.entities.ProfitRecord.update(profitData.editingProfitId, updateData);
+        console.log('✅ [BETS] ProfitRecord atualizado');
+        toast.success('✅ Lucro atualizado!');
+      } else {
+        const recordsToCreate = profitData.account_ids.map(accountId => ({
+          title: `Lucro Rápido - ${bookmakers.find(b => b.id === profitData.bookmaker_id)?.name || 'Casa'}`,
+          amount: profitData.profit,
+          record_date: profitData.date,
+          period_type: 'daily',
+          category: 'aposta',
+          bookmaker_id: profitData.bookmaker_id,
+          wallet_id: accountId,
+          notes: profitData.notes || `Registrado via Lucro Rápido`,
+          created_by: currentUser.email
+        }));
+        console.log('📋 [BETS] Criando ProfitRecords:', recordsToCreate.map(r => ({
+          record_date: r.record_date,
+          amount: r.amount,
+          wallet_id: r.wallet_id
+        })));
+        const created = await Promise.all(
+          recordsToCreate.map(record => base44.entities.ProfitRecord.create(record))
+        );
+        console.log('✅ [BETS] ProfitRecords criados:', created.map(r => ({
+          id: r.id,
+          record_date: r.record_date,
+          created_date: r.created_date
+        })));
+        toast.success('✅ Lucro(s) registrado(s)!');
+      }
+      await queryClient.invalidateQueries(['profit-records']);
+      await queryClient.invalidateQueries(['dashboard-profit-records']);
+      await queryClient.invalidateQueries(['wallets']);
+      await queryClient.invalidateQueries(['dashboard-wallets']);
+      await refetchProfitRecords();
+      setShowQuickProfitModal(false);
+      setEditingProfit(null);
+    } catch (error) {
+      console.error('❌ [BETS] Erro ao salvar:', error);
+      toast.error('❌ Erro ao salvar lucro');
+    }
+  };
+
+  const filteredBets = useMemo(() => {
+    let filtered = [...bets];
+
+    // Filtro de Tipo de Procedimento (múltipla seleção)
+    if (filters.procedureTypes && filters.procedureTypes.length > 0) {
+      filtered = filtered.filter(b =>
+        filters.procedureTypes.includes(b.procedure_type || 'normal')
+      );
+    }
+
+    // Filtro de Contas (múltipla seleção)
+    if (filters.walletIds && filters.walletIds.length > 0) {
+      filtered = filtered.filter(b =>
+        filters.walletIds.includes(b.wallet_id)
+      );
+    }
+
+    // Filtro de busca por nome
+    if (filters.search) {
+      const search = filters.search.toLowerCase();
+      filtered = filtered.filter(b =>
+        b.event_name?.toLowerCase().includes(search) ||
+        b.market?.toLowerCase().includes(search) ||
+        b.description?.toLowerCase().includes(search)
+      );
+    }
+
+    // Filtro de data inicial
+    if (filters.dateFrom) {
+      filtered = filtered.filter(b => new Date(b.event_date || b.created_date) >= new Date(filters.dateFrom));
+    }
+
+    // Filtro de data final
+    if (filters.dateTo) {
+      const toDate = new Date(filters.dateTo);
+      toDate.setHours(23, 59, 59);
+      filtered = filtered.filter(b => new Date(b.event_date || b.created_date) <= toDate);
+    }
+
+    // Filtro de stake mínimo
+    if (filters.minStake) {
+      filtered = filtered.filter(b => (b.stake || 0) >= parseFloat(filters.minStake));
+    }
+
+    return filtered;
+  }, [bets, filters]);
+
+  const allItems = useMemo(() => {
+    const items = [
+      ...filteredBets.map(b => ({ ...b, itemType: 'bet' })),
+      ...profitRecords.map(p => ({
+        ...p,
+        itemType: 'profit',
+        event_date: p.record_date || p.created_date
+      }))
+    ];
+    return items.sort((a, b) => {
+      const dateA = new Date(a.event_date || a.created_date);
+      const dateB = new Date(b.event_date || b.created_date);
+      return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+    });
+  }, [filteredBets, profitRecords, sortOrder]);
+
+  const stats = useMemo(() => {
+    const totalStake = filteredBets.reduce((sum, bet) => {
+      let stakeSum = 0;
+      if (!bet.is_freebet) {
+        stakeSum += parseFloat(bet.stake) || 0;
+      }
+      (bet.protection_bookmakers || []).forEach(p => {
+        stakeSum += parseFloat(p.stake) || 0;
+      });
+      (bet.additional_bets || []).forEach(a => {
+        stakeSum += parseFloat(a.stake) || 0;
+      });
+      return sum + stakeSum;
+    }, 0);
+
+    const totalProfit = filteredBets.reduce((sum, bet) => {
+      return sum + (parseFloat(bet.profit_loss) || 0);
+    }, 0);
+
+    const hasPendingBets = filteredBets.some(b => b.status === 'pendente');
+
+    const settledBets = filteredBets.filter(b =>
+      ['green', 'perda', 'bateu_protecao', 'duplo_green', 'triplo_green'].includes(b.status)
+    );
+
+    const greens = settledBets.filter(b =>
+      ['green', 'bateu_protecao', 'duplo_green', 'triplo_green'].includes(b.status)
+    );
+
+    const reds = settledBets.filter(b => b.status === 'perda');
+
+    return {
+      totalStake,
+      totalProfit,
+      hasPendingBets,
+      winRate: settledBets.length > 0 ? (greens.length / settledBets.length) * 100 : 0,
+      greenCount: greens.length,
+      redCount: reds.length
+    };
+  }, [filteredBets]);
+
+  const { totalStake, totalProfit, hasPendingBets, winRate, greenCount, redCount } = stats;
+
+  const profitCardType = hasPendingBets
+    ? 'pending'
+    : totalProfit >= 0
+      ? 'profit'
+      : 'loss';
+
+  const isOffline = !navigator.onLine;
+  const isMobile = window.innerWidth < 768;
+
+  if (userLoading) {
+    return (
+      <div className="w-full min-h-screen flex items-center justify-center bg-slate-950" style={{ overflow: 'hidden' }}>
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full mx-auto mb-4 animate-spin" />
+          <p className="text-white font-semibold text-lg mb-2">Carregando apostas...</p>
+          <p className="text-slate-400 text-sm">Aguarde um momento</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="w-full min-h-screen flex items-center justify-center bg-slate-950 p-6">
+        <Card className="bg-slate-800 border-slate-700 p-8 max-w-md">
+          <div className="text-center">
+            <AlertTriangle className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
+            <p className="text-white text-lg font-semibold mb-4">
+              Erro ao carregar dados
+            </p>
+            <p className="text-slate-400 text-sm mb-6">
+              Não foi possível carregar suas informações. Tente novamente.
+            </p>
+            <div className="space-y-3">
+              <Button
+                onClick={() => window.location.reload()}
+                className="w-full bg-blue-600 hover:bg-blue-700"
+              >
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Recarregar
+              </Button>
+              <Button
+                onClick={() => navigate(createPageUrl('Dashboard'))}
+                variant="outline"
+                className="w-full border-slate-600 text-slate-300"
+              >
+                <Home className="w-4 h-4 mr-2" />
+                Ir para Dashboard
+              </Button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <GlobalErrorBoundary>
+      <div style={{
+        width: '100%',
+        maxWidth: '100vw',
+        minHeight: '100vh',
+        padding: isMobile ? '16px 12px' : '24px 32px',
+        background: '#0a0a0a',
+        overflow: 'hidden',
+        overflowY: 'auto'
+      }}>
+        <div style={{
+          maxWidth: '1400px',
+          margin: '0 auto',
+          width: '100%',
+          overflow: 'hidden',
+          minHeight: '100vh'
+        }}>
+
+          <DraggableQuickProfitButton
+            onClick={() => setShowQuickProfitModal(true)}
+          />
+
+          <motion.div
+            style={{ marginBottom: isMobile ? '20px' : '32px' }}
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px',
+              marginBottom: '12px'
+            }}>
+              <div style={{ minWidth: 0, flex: '1 1 auto' }}>
+                <h1 style={{
+                  fontSize: isMobile ? '24px' : '32px',
+                  fontWeight: 900,
+                  letterSpacing: '-1px',
+                  color: '#ffffff',
+                  marginBottom: '4px',
+                  wordBreak: 'break-word'
+                }}>
+                  Minhas Apostas
+                </h1>
+                <p style={{
+                  color: 'rgba(176, 176, 176, 0.8)',
+                  fontSize: isMobile ? '12px' : '14px',
+                  fontWeight: 500
+                }}>
+                  {allItems.length} registro{allItems.length !== 1 ? 's' : ''}
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {window.innerWidth >= 768 && (
+                  <Button
+                    onClick={handleManualRefresh}
+                    variant="outline"
+                    className="border-slate-700 text-slate-300"
+                    disabled={isOffline}
+                    size="sm"
+                  >
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Atualizar
+                  </Button>
+                )}
+                <Button onClick={() => setAiUploadOpen(true)} className="bg-gradient-to-r from-purple-600 to-pink-600" disabled={isOffline} size="sm">
+                  <Sparkles className="w-3 h-3 mr-1" />
+                  {isMobile ? 'IA' : 'Importar IA'}
+                </Button>
+                <Button onClick={() => navigate(createPageUrl('AddBet'))} variant="default" disabled={isOffline} size="sm">
+                  <Plus className="w-4 h-4 mr-1" />
+                  {isMobile ? 'Nova' : 'Nova Aposta'}
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+
+          {isOffline && (
+            <div className="p-4 bg-orange-900/20 border border-orange-600 rounded-lg flex items-center gap-3 mb-6">
+              <WifiOff className="w-5 h-5 text-orange-400" />
+              <div className="flex-1">
+                <p className="text-white font-semibold">Modo Offline</p>
+                <p className="text-orange-200 text-sm">Algumas ações desabilitadas</p>
+              </div>
+            </div>
+          )}
+
+          <motion.div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)',
+              gap: isMobile ? '12px' : '20px',
+              marginBottom: '20px',
+              maxWidth: '100%',
+              overflowX: 'hidden'
+            }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+          >
+            <StatCard
+              title="Stake Total"
+              value={`R$ ${totalStake.toFixed(2)}`}
+              subtitle={`${filteredBets.length} aposta${filteredBets.length !== 1 ? 's' : ''}`}
+              icon={DollarSign}
+              type="blue"
+            />
+
+            <StatCard
+              title="Lucro/Perda"
+              value={`${totalProfit >= 0 ? '+' : ''}R$ ${totalProfit.toFixed(2)}`}
+              subtitle={hasPendingBets ? 'Apostas pendentes' : `Win Rate: ${winRate.toFixed(1)}%`}
+              icon={TrendingUp}
+              type={profitCardType}
+            />
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            style={{ overflowX: 'hidden', maxWidth: '100%' }}
+          >
+            <Card className="bg-slate-800/50 border-slate-700" style={{ marginBottom: '20px', maxWidth: '100%' }}>
+              <CardHeader style={{ padding: isMobile ? '16px' : '24px' }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '12px'
+                }}>
+                  <CardTitle className="text-white flex items-center gap-2" style={{ fontSize: isMobile ? '14px' : '18px' }}>
+                    <div style={{
+                      width: '4px',
+                      height: isMobile ? '16px' : '20px',
+                      background: 'linear-gradient(180deg, #d4af37 0%, #e5c158 100%)',
+                      borderRadius: '2px',
+                      boxShadow: '0 0 8px rgba(212, 175, 55, 0.4)'
+                    }} />
+                    Filtros Avançados
+                  </CardTitle>
+                  <Button
+                    onClick={() => setFilters({
+                      procedureTypes: [],
+                      walletIds: [],
+                      search: '',
+                      dateFrom: '',
+                      dateTo: '',
+                      minStake: ''
+                    })}
+                    variant="ghost"
+                    size="sm"
+                    style={{
+                      color: '#d4af37',
+                      fontSize: '12px',
+                      fontWeight: 600
+                    }}
+                  >
+                    Limpar Filtros
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent style={{ padding: isMobile ? '12px 16px 16px' : '0 24px 24px' }}>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)',
+                  gap: '16px'
+                }}>
+
+                  <div style={{ gridColumn: isMobile ? '1' : '1 / -1' }}>
+                    <label style={{
+                      display: 'block',
+                      color: 'rgba(176, 176, 176, 0.8)',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      marginBottom: '8px'
+                    }}>
+                      Buscar por Nome
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Nome do evento, mercado..."
+                      value={filters.search}
+                      onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        background: '#0a0a0a',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
+                        borderRadius: '8px',
+                        color: '#ffffff',
+                        fontSize: '14px',
+                        outline: 'none',
+                        transition: 'all 0.2s ease'
+                      }}
+                      onFocus={(e) => e.target.style.borderColor = '#d4af37'}
+                      onBlur={(e) => e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)'}
+                    />
+                  </div>
+
+                  {/* Calendário Unificado (Date Range Picker) */}
+                  <div style={{ gridColumn: isMobile ? '1' : '1 / -1' }}>
+                    <label style={{
+                      display: 'block',
+                      color: 'rgba(176, 176, 176, 0.8)',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      marginBottom: '8px'
+                    }}>
+                      Período (Clique na data inicial, depois na final)
+                    </label>
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: isMobile ? '1fr' : '1fr auto 1fr',
+                      gap: '12px',
+                      alignItems: 'center'
+                    }}>
+                      <div>
+                        <input
+                          type="date"
+                          value={filters.dateFrom}
+                          onChange={(e) => {
+                            const newFrom = e.target.value;
+                            setFilters({ ...filters, dateFrom: newFrom });
+                            // Se a data final for anterior à nova data inicial, limpa a data final
+                            if (filters.dateTo && newFrom > filters.dateTo) {
+                              setFilters({ ...filters, dateFrom: newFrom, dateTo: '' });
+                            }
+                          }}
+                          placeholder="Data inicial"
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            background: '#0a0a0a',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: '8px',
+                            color: '#ffffff',
+                            fontSize: '14px',
+                            outline: 'none',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onFocus={(e) => e.target.style.borderColor = '#d4af37'}
+                          onBlur={(e) => e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)'}
+                        />
+                      </div>
+                      <div style={{
+                        color: 'rgba(176, 176, 176, 0.5)',
+                        fontSize: '18px',
+                        fontWeight: 'bold',
+                        textAlign: 'center'
+                      }}>
+                        →
+                      </div>
+                      <div>
+                        <input
+                          type="date"
+                          value={filters.dateTo}
+                          onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })}
+                          min={filters.dateFrom || undefined}
+                          placeholder="Data final"
+                          disabled={!filters.dateFrom}
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            background: filters.dateFrom ? '#0a0a0a' : '#1a1a1a',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: '8px',
+                            color: filters.dateFrom ? '#ffffff' : '#666666',
+                            fontSize: '14px',
+                            outline: 'none',
+                            transition: 'all 0.2s ease',
+                            cursor: filters.dateFrom ? 'pointer' : 'not-allowed'
+                          }}
+                          onFocus={(e) => e.target.style.borderColor = '#d4af37'}
+                          onBlur={(e) => e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)'}
+                        />
+                      </div>
+                    </div>
+                    {filters.dateFrom && filters.dateTo && (
+                      <div style={{
+                        marginTop: '8px',
+                        padding: '8px 12px',
+                        background: 'rgba(212, 175, 55, 0.1)',
+                        border: '1px solid rgba(212, 175, 55, 0.3)',
+                        borderRadius: '6px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px'
+                      }}>
+                        <span style={{
+                          color: '#d4af37',
+                          fontSize: '12px',
+                          fontWeight: 600
+                        }}>
+                          {new Date(filters.dateFrom).toLocaleDateString('pt-BR')} - {new Date(filters.dateTo).toLocaleDateString('pt-BR')}
+                        </span>
+                        <button
+                          onClick={() => setFilters({ ...filters, dateFrom: '', dateTo: '' })}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#d4af37',
+                            cursor: 'pointer',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            textDecoration: 'underline'
+                          }}
+                        >
+                          Limpar
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ✅ FILTRO: TIPO DE PROCEDIMENTO COM BOTÕES */}
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      color: 'rgba(176, 176, 176, 0.8)',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      marginBottom: '12px'
+                    }}>
+                      Tipo de Procedimento {filters.procedureTypes.length > 0 && (
+                        <span style={{ color: '#d4af37', marginLeft: '8px' }}>
+                          ({filters.procedureTypes.length})
+                        </span>
+                      )}
+                    </label>
+                    <div style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '8px'
+                    }}>
+                      {[
+                        { value: 'normal', label: 'Normal', icon: '📊' },
+                        { value: 'arbitrage', label: 'Arbitragem', icon: '⚖️' },
+                        { value: 'chance_duplo', label: 'Chance Duplo', icon: '🎲' },
+                        { value: 'extracao_freebet', label: 'Extração FB', icon: '🎁' },
+                        { value: 'procedimento_freebet', label: 'Procedimento FB', icon: '🔄' },
+                        { value: 'rodadas_gratis', label: 'Rodadas Grátis', icon: '🎰' }
+                      ].map((type) => {
+                        const isSelected = filters.procedureTypes.includes(type.value);
+                        return (
+                          <button
+                            key={type.value}
+                            onClick={() => {
+                              if (isSelected) {
+                                setFilters({
+                                  ...filters,
+                                  procedureTypes: filters.procedureTypes.filter(t => t !== type.value)
+                                });
+                              } else {
+                                setFilters({
+                                  ...filters,
+                                  procedureTypes: [...filters.procedureTypes, type.value]
+                                });
+                              }
+                            }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '8px 16px',
+                              background: isSelected 
+                                ? 'linear-gradient(135deg, rgba(212, 175, 55, 0.2), rgba(212, 175, 55, 0.1))' 
+                                : 'rgba(20, 20, 20, 0.6)',
+                              border: isSelected 
+                                ? '2px solid #d4af37' 
+                                : '2px solid rgba(255, 255, 255, 0.1)',
+                              borderRadius: '12px',
+                              color: isSelected ? '#d4af37' : '#ffffff',
+                              fontSize: '13px',
+                              fontWeight: isSelected ? 700 : 500,
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: isSelected ? '0 0 12px rgba(212, 175, 55, 0.3)' : 'none',
+                              transform: isSelected ? 'scale(1.02)' : 'scale(1)'
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.transform = 'scale(1.05)';
+                              e.currentTarget.style.borderColor = '#d4af37';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.transform = isSelected ? 'scale(1.02)' : 'scale(1)';
+                              e.currentTarget.style.borderColor = isSelected ? '#d4af37' : 'rgba(255, 255, 255, 0.1)';
+                            }}
+                          >
+                            <span style={{ fontSize: '16px' }}>{type.icon}</span>
+                            <span>{type.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* ✅ FILTRO: CONTAS COM BOTÕES */}
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      color: 'rgba(176, 176, 176, 0.8)',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      marginBottom: '12px'
+                    }}>
+                      Contas {filters.walletIds.length > 0 && (
+                        <span style={{ color: '#d4af37', marginLeft: '8px' }}>
+                          ({filters.walletIds.length})
+                        </span>
+                      )}
+                    </label>
+                    {wallets.length === 0 ? (
+                      <div style={{
+                        padding: '16px',
+                        background: 'rgba(20, 20, 20, 0.6)',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
+                        borderRadius: '8px',
+                        color: 'rgba(176, 176, 176, 0.6)',
+                        fontSize: '13px',
+                        textAlign: 'center'
+                      }}>
+                        Nenhuma conta disponível
+                      </div>
+                    ) : (
+                      <div style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: '8px'
+                      }}>
+                        {wallets.map((wallet) => {
+                          const isSelected = filters.walletIds.includes(wallet.id);
+                          const walletName = wallet.is_main_account ? 'Principal' : wallet.name;
+                          const walletIcon = wallet.is_main_account ? '⭐' : '💳';
+                          
+                          return (
+                            <button
+                              key={wallet.id}
+                              onClick={() => {
+                                if (isSelected) {
+                                  setFilters({
+                                    ...filters,
+                                    walletIds: filters.walletIds.filter(id => id !== wallet.id)
+                                  });
+                                } else {
+                                  setFilters({
+                                    ...filters,
+                                    walletIds: [...filters.walletIds, wallet.id]
+                                  });
+                                }
+                              }}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '8px 16px',
+                                background: isSelected 
+                                  ? 'linear-gradient(135deg, rgba(212, 175, 55, 0.2), rgba(212, 175, 55, 0.1))' 
+                                  : 'rgba(20, 20, 20, 0.6)',
+                                border: isSelected 
+                                  ? '2px solid #d4af37' 
+                                  : '2px solid rgba(255, 255, 255, 0.1)',
+                                borderRadius: '12px',
+                                color: isSelected ? '#d4af37' : '#ffffff',
+                                fontSize: '13px',
+                                fontWeight: isSelected ? 700 : 500,
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                                boxShadow: isSelected ? '0 0 12px rgba(212, 175, 55, 0.3)' : 'none',
+                                transform: isSelected ? 'scale(1.02)' : 'scale(1)'
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.transform = 'scale(1.05)';
+                                e.currentTarget.style.borderColor = '#d4af37';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.transform = isSelected ? 'scale(1.02)' : 'scale(1)';
+                                e.currentTarget.style.borderColor = isSelected ? '#d4af37' : 'rgba(255, 255, 255, 0.1)';
+                              }}
+                            >
+                              <span style={{ fontSize: '16px' }}>{walletIcon}</span>
+                              <span>{walletName}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            style={{ overflowX: 'hidden', maxWidth: '100%' }}
+          >
+            {(betsLoading || profitsLoading) && allItems.length === 0 ? (
+              <Card className="bg-slate-800/50 border-slate-700">
+                <CardContent className="p-12 text-center">
+                  <RefreshCw className="w-12 h-12 animate-spin text-blue-400 mx-auto mb-4" />
+                  <p className="text-white font-semibold text-lg">Carregando apostas...</p>
+                  <p className="text-slate-400 text-sm mt-2">Aguarde um momento</p>
+                </CardContent>
+              </Card>
+            ) : allItems.length === 0 ? (
+              <Card className="bg-slate-800/50 border-slate-700">
+                <CardContent className="p-12 text-center">
+                  <Target className="w-16 h-16 mx-auto mb-4" style={{ color: 'rgba(128, 128, 128, 0.5)' }} />
+                  <h3 className="text-xl font-bold text-white mb-2">
+                    Nenhum registro encontrado
+                  </h3>
+                  <p style={{ color: 'rgba(176, 176, 176, 0.8)', marginBottom: '24px' }}>
+                    {filters.procedureTypes.length === 0 && filters.walletIds.length === 0 && !filters.search && !filters.dateFrom && !filters.dateTo
+                      ? 'Comece adicionando suas apostas!'
+                      : 'Nenhuma aposta encontrada com os filtros aplicados. Tente ajustar os filtros.'}
+                  </p>
+                  <Button onClick={() => navigate(createPageUrl('AddBet'))} variant="default" disabled={isOffline}>
+                    <Plus className="w-4 h-4 mr-2" />
+                    Adicionar Aposta
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-4" style={{ maxWidth: '100%', overflowX: 'hidden' }}>
+                {allItems.map((item) => (
+                  item.itemType === 'bet' ? (
+                    <RealtimeBetCard
+                      key={`bet-${item.id}`}
+                      bet={item}
+                      bookmakers={bookmakers}
+                      wallets={wallets}
+                      onStatusChange={updateBetStatus}
+                      onQuickEdit={() => handleEditBet(item)}
+                      onDelete={async () => {
+                        if (confirm('Deletar esta aposta?')) {
+                          console.log('🗑️ [DELETE] Deletando aposta:', item.id);
+
+                          // ✅ OPTIMISTIC UPDATE: Remover da UI IMEDIATAMENTE
+                          queryClient.setQueryData(['bets', currentUser?.email], (oldBets = []) => {
+                            return oldBets.filter(bet => bet.id !== item.id);
+                          });
+
+                          toast.success('✅ Deletada!', { duration: 1500 });
+
+                          try {
+                            // ✅ DELETE NO BACKEND
+                            await base44.entities.Bet.delete(item.id);
+
+                            // ✅ INVALIDAR + REFETCH (sem await para não bloquear)
+                            queryClient.invalidateQueries({ queryKey: ['bets'] });
+                            refetchBets();
+
+                            console.log('✅ [DELETE] Aposta deletada com sucesso');
+                          } catch (error) {
+                            console.error('❌ [DELETE] Erro:', error);
+                            // Refetch para reverter optimistic update
+                            refetchBets();
+                            toast.error('❌ Erro ao deletar');
+                          }
+                        }
+                      }}
+                      isOffline={isOffline}
+                    />
+                  ) : (
+                    <ProfitCard
+                      key={`profit-${item.id}`}
+                      profit={item}
+                      wallets={wallets}
+                      bookmakers={bookmakers}
+                      onEdit={handleEditProfit}
+                      onDelete={handleDeleteProfit}
+                    />
+                  )
+                ))}
+              </div>
+            )}
+          </motion.div>
+
+          <AIUploadDialog
+            open={aiUploadOpen}
+            onOpenChange={setAiUploadOpen}
+            onBetsExtracted={handleAISave}
+            bookmakers={bookmakers}
+            wallets={wallets}
+            profiles={[]}
+          />
+
+          {betToEdit && (
+            <EditBetDialog
+              open={editBetOpen}
+              onOpenChange={setEditBetOpen}
+              bet={betToEdit}
+              onSave={handleSaveEdit}
+              bookmakers={bookmakers}
+              wallets={wallets}
+              profiles={[]}
+            />
+          )}
+
+          {freebetBet && (
+            <FreebetBonusDialog
+              open={freebetDialogOpen}
+              onOpenChange={setFreebetDialogOpen}
+              bet={freebetBet}
+              selectedAccounts={freebetAccounts}
+              onSave={handleSaveFreebetBonus}
+            />
+          )}
+
+          {selectedBet && (
+            <BetDetailModal
+              isOpen={isDetailModalOpen}
+              onOpenChange={setIsDetailModalOpen}
+              bet={selectedBet}
+              bookmakers={bookmakers}
+              wallets={wallets}
+              onUpdate={() => queryClient.invalidateQueries(['bets'])}
+              onDelete={() => {
+                setSelectedBet(null);
+                setIsDetailModalOpen(false);
+                queryClient.invalidateQueries(['bets']);
+              }}
+              onStatusChange={updateBetStatus}
+              isOffline={isOffline}
+            />
+          )}
+
+          {showQuickProfitModal && (
+            <QuickProfitModal
+              isOpen={showQuickProfitModal}
+              onClose={() => {
+                setShowQuickProfitModal(false);
+                setEditingProfit(null);
+              }}
+              onConfirm={handleSaveProfit}
+              wallets={wallets}
+              bookmakers={bookmakers}
+              profiles={[]}
+              editingProfit={editingProfit}
+            />
+          )}
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes pulse {
+          0%, 100% {
+            transform: scale(1);
+            opacity: 1;
+          }
+          50% {
+            transform: scale(1.05);
+            opacity: 0.9;
+          }
+        }
+      `}</style>
+    </GlobalErrorBoundary>
+  );
+}
