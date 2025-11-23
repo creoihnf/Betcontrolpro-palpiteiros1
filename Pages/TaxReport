@@ -1,0 +1,232 @@
+import React, { useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { FileText, Download, Calendar, DollarSign, TrendingUp, AlertCircle, Loader2 } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { base44 } from "@/api/base44Client";
+import { toast } from "sonner";
+
+export default function TaxReportPage() {
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [reportData, setReportData] = useState(null);
+
+  const currentYear = new Date().getFullYear();
+  const availableYears = Array.from({ length: 5 }, (_, i) => currentYear - i);
+
+  const generateReport = async (format = 'pdf') => {
+    setIsGenerating(true);
+    try {
+      const response = await base44.functions.invoke('generateTaxReport', {
+        year: parseInt(selectedYear),
+        format
+      });
+
+      if (format === 'pdf') {
+        // Download PDF
+        const blob = new Blob([response.data], { type: 'application/pdf' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `relatorio-ir-${selectedYear}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+        toast.success(`✅ Relatório de ${selectedYear} gerado com sucesso!`);
+      } else {
+        setReportData(response.data);
+        toast.success('Dados carregados com sucesso!');
+      }
+    } catch (error) {
+      console.error('Erro ao gerar relatório:', error);
+      toast.error('❌ Erro ao gerar relatório. Tente novamente.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  return (
+    <div className="p-4 md:p-8 bg-background min-h-screen">
+      <div className="max-w-5xl mx-auto">
+        <div className="mb-8">
+          <h1 className="text-3xl md:text-4xl font-bold text-foreground flex items-center gap-3 mb-2">
+            <FileText className="w-10 h-10 text-primary" />
+            Relatório para Declaração de IR
+          </h1>
+          <p className="text-muted-foreground">
+            Gere relatórios completos das suas apostas para declarar no Imposto de Renda
+          </p>
+        </div>
+
+        <Alert className="mb-6 border-amber-500 bg-amber-50 dark:bg-amber-950">
+          <AlertCircle className="w-5 h-5 text-amber-600" />
+          <AlertDescription className="text-amber-900 dark:text-amber-100">
+            <strong>Importante:</strong> Este relatório é apenas informativo. Consulte sempre um contador para orientações específicas sobre sua declaração de IR.
+          </AlertDescription>
+        </Alert>
+
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle>Selecione o Ano-Calendário</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="flex flex-col md:flex-row gap-4">
+              <div className="flex-1">
+                <Select value={selectedYear} onValueChange={setSelectedYear}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableYears.map(year => (
+                      <SelectItem key={year} value={year.toString()}>
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-4 h-4" />
+                          {year}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex gap-3">
+                <Button
+                  onClick={() => generateReport('json')}
+                  variant="outline"
+                  disabled={isGenerating}
+                  className="flex-1 md:flex-initial"
+                >
+                  {isGenerating ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <TrendingUp className="w-4 h-4 mr-2" />
+                  )}
+                  Visualizar
+                </Button>
+
+                <Button
+                  onClick={() => generateReport('pdf')}
+                  disabled={isGenerating}
+                  className="flex-1 md:flex-initial bg-primary"
+                >
+                  {isGenerating ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4 mr-2" />
+                  )}
+                  Baixar PDF
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {reportData && (
+          <>
+            <Card className="mb-6">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <DollarSign className="w-6 h-6 text-primary" />
+                  Resumo Fiscal - {reportData.year}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="p-4 bg-accent rounded-lg">
+                    <p className="text-sm text-muted-foreground mb-1">Total de Operações</p>
+                    <p className="text-2xl font-bold">{reportData.summary.totalOperations}</p>
+                  </div>
+
+                  <div className="p-4 bg-accent rounded-lg">
+                    <p className="text-sm text-muted-foreground mb-1">Total Investido</p>
+                    <p className="text-2xl font-bold">R$ {reportData.summary.totalInvested.toFixed(2)}</p>
+                  </div>
+
+                  <div className="p-4 bg-accent rounded-lg">
+                    <p className="text-sm text-muted-foreground mb-1">Lucro/Prejuízo</p>
+                    <p className={`text-2xl font-bold ${reportData.summary.totalProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {reportData.summary.totalProfit >= 0 ? '+' : ''}R$ {reportData.summary.totalProfit.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Informações para Declaração</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-4 bg-green-50 dark:bg-green-950 rounded-lg border border-green-200 dark:border-green-800">
+                  <p className="font-semibold text-green-900 dark:text-green-100 mb-2">
+                    Rendimentos Tributáveis
+                  </p>
+                  <p className="text-sm text-green-700 dark:text-green-300 mb-3">
+                    Declarar em: <strong>Rendimentos Sujeitos à Tributação Exclusiva/Definitiva</strong>
+                  </p>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-green-700 dark:text-green-300">Valor a declarar:</span>
+                    <Badge className="bg-green-600 text-white text-lg px-4 py-2">
+                      R$ {reportData.taxInfo.taxableIncome.toFixed(2)}
+                    </Badge>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <p className="font-semibold text-blue-900 dark:text-blue-100 mb-2">
+                    Imposto Estimado (30%)
+                  </p>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-blue-700 dark:text-blue-300">Valor aproximado:</span>
+                    <Badge className="bg-blue-600 text-white text-lg px-4 py-2">
+                      R$ {reportData.taxInfo.estimatedTax.toFixed(2)}
+                    </Badge>
+                  </div>
+                </div>
+
+                {reportData.taxInfo.losses > 0 && (
+                  <div className="p-4 bg-amber-50 dark:bg-amber-950 rounded-lg border border-amber-200 dark:border-amber-800">
+                    <p className="font-semibold text-amber-900 dark:text-amber-100 mb-2">
+                      ⚠️ Prejuízos
+                    </p>
+                    <p className="text-sm text-amber-700 dark:text-amber-300 mb-2">
+                      Prejuízos com apostas <strong>NÃO</strong> podem ser compensados com outros rendimentos.
+                    </p>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-amber-700 dark:text-amber-300">Total de prejuízos:</span>
+                      <Badge className="bg-amber-600 text-white text-lg px-4 py-2">
+                        R$ {reportData.taxInfo.losses.toFixed(2)}
+                      </Badge>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </>
+        )}
+
+        <Card className="mt-6 bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800">
+          <CardContent className="pt-6">
+            <div className="flex items-start gap-4">
+              <FileText className="w-8 h-8 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+              <div>
+                <h3 className="font-bold text-lg text-blue-900 dark:text-blue-100 mb-2">
+                  Dicas Importantes
+                </h3>
+                <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1 list-disc list-inside">
+                  <li>Mantenha todos os extratos das casas de apostas por 5 anos</li>
+                  <li>Consulte um contador para orientações específicas</li>
+                  <li>A legislação sobre apostas pode mudar - fique atento</li>
+                  <li>Declare todos os ganhos, mesmo que pequenos</li>
+                </ul>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
