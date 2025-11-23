@@ -1,0 +1,566 @@
+
+import React, { useState, useEffect } from "react";
+import { base44 } from "@/api/base44Client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  User,
+  Mail,
+  Shield,
+  Save,
+  Loader2,
+  TrendingUp,
+  BarChart3,
+  Calculator,
+  CheckCircle2,
+  Sparkles,
+  Phone,
+  CreditCard,
+  NotebookText
+} from "lucide-react";
+import { toast } from "sonner";
+import { motion } from "framer-motion";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import SensitiveData from '../components/security/SensitiveData';
+import { encryption } from '../components/utils/encryption';
+
+const PROFILE_TYPES = [
+  {
+    id: 'iniciante',
+    title: 'Iniciante',
+    icon: Sparkles,
+    color: 'from-blue-500 to-cyan-500',
+    description: 'Começando no mundo das apostas',
+    features: ['Controle básico', 'Tutoriais guiados', 'Interface simplificada']
+  },
+  {
+    id: 'profissional',
+    title: 'Profissional',
+    icon: TrendingUp,
+    color: 'from-purple-500 to-pink-500',
+    description: 'Apostador experiente',
+    features: ['Análises avançadas', 'Múltiplas contas', 'Calculadoras profissionais']
+  },
+  {
+    id: 'gestor',
+    title: 'Gestor',
+    icon: BarChart3,
+    color: 'from-green-500 to-emerald-500',
+    description: 'Gerencia apostas de terceiros',
+    features: ['Gestão de perfis', 'Relatórios detalhados', 'Controle de pagamentos']
+  }
+];
+
+export default function ProfileSetupPage() {
+  const queryClient = useQueryClient();
+  const [isLoading, setIsLoading] = useState(true);
+
+  const [formData, setFormData] = useState({
+    full_name: '',
+    profile_type: 'iniciante',
+    name: '',
+    cpf: '',
+    phone: '',
+    pix_key: '',
+    color: '',
+    payment_type: '',
+    percentage: 0,
+    fixed_amount: 0,
+    notes: ''
+  });
+
+  const { data: user, isLoading: loadingUser } = useQuery({
+    queryKey: ['current-user'],
+    queryFn: async () => {
+      const currentUser = await base44.auth.me();
+      return currentUser;
+    }
+  });
+
+  const { data: userProfile, isLoading: loadingUserProfile } = useQuery({
+    queryKey: ['user-profile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.Profile.filter({
+        created_by: user.email
+      });
+      return profiles[0] || null;
+    },
+    enabled: !!user?.email,
+  });
+
+  const { data: subscription } = useQuery({
+    queryKey: ['user-subscription'],
+    queryFn: async () => {
+      if (!user) return null;
+      const subs = await base44.entities.UserSubscription.filter({
+        created_by: user.email
+      });
+      return subs[0] || null;
+    },
+    enabled: !!user
+  });
+
+  useEffect(() => {
+    if (user || userProfile) {
+      const newFormData = {
+        full_name: user?.full_name || '',
+        profile_type: user?.preferences?.user_profile_type || 'iniciante',
+        name: userProfile?.name || user?.full_name || '',
+        cpf: userProfile?.cpf || '',
+        phone: userProfile?.phone || '',
+        pix_key: userProfile?.pix_key || '',
+        color: userProfile?.color || '',
+        payment_type: userProfile?.payment_type || '',
+        percentage: userProfile?.percentage || 0,
+        fixed_amount: userProfile?.fixed_amount || 0,
+        notes: userProfile?.notes || ''
+      };
+      setFormData(newFormData);
+      setIsLoading(false);
+    }
+  }, [user, userProfile]);
+
+  const updateAuthProfileMutation = useMutation({
+    mutationFn: async (data) => {
+      await base44.auth.updateMe({
+        full_name: data.full_name,
+        preferences: {
+          ...user?.preferences,
+          user_profile_type: data.profile_type
+        }
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['current-user'] });
+      toast.success('✅ Informações básicas atualizadas!');
+    },
+    onError: (error) => {
+      console.error('Erro ao atualizar:', error);
+      toast.error('❌ Erro ao atualizar informações');
+    }
+  });
+
+  const saveProfileEntityMutation = useMutation({
+    mutationFn: async (data) => {
+      if (!user) throw new Error('Usuário não autenticado');
+
+      const profileData = {
+        name: data.name,
+        is_active: true,
+        created_by: user.email,
+        color: data.color,
+        payment_type: data.payment_type,
+        percentage: parseFloat(data.percentage) || 0,
+        fixed_amount: parseFloat(data.fixed_amount) || 0,
+        notes: data.notes
+      };
+
+      if (data.cpf && data.cpf.trim()) {
+        profileData.cpf = await encryption.encrypt(data.cpf);
+        profileData.cpf_encrypted = true;
+      } else {
+        profileData.cpf = null;
+        profileData.cpf_encrypted = false;
+      }
+
+      if (data.phone && data.phone.trim()) {
+        profileData.phone = await encryption.encrypt(data.phone);
+        profileData.phone_encrypted = true;
+      } else {
+        profileData.phone = null;
+        profileData.phone_encrypted = false;
+      }
+
+      if (data.pix_key && data.pix_key.trim()) {
+        profileData.pix_key = await encryption.encrypt(data.pix_key);
+        profileData.pix_key_encrypted = true;
+      } else {
+        profileData.pix_key = null;
+        profileData.pix_key_encrypted = false;
+      }
+
+      if (userProfile) {
+        await base44.entities.Profile.update(userProfile.id, profileData);
+        toast.success('✅ Perfil atualizado!');
+      } else {
+        await base44.entities.Profile.create(profileData);
+        toast.success('✅ Perfil criado!');
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['user-profile', user?.email] });
+    },
+    onError: (error) => {
+      console.error('Erro ao salvar perfil:', error);
+      toast.error('❌ Erro ao salvar perfil');
+    }
+  });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!user) {
+      toast.error('❌ Usuário não autenticado');
+      return;
+    }
+
+    if (!formData.full_name.trim()) {
+      toast.error('❌ Nome completo é obrigatório');
+      return;
+    }
+
+    try {
+      await updateAuthProfileMutation.mutateAsync({
+        full_name: formData.full_name,
+        profile_type: formData.profile_type
+      });
+
+      await saveProfileEntityMutation.mutateAsync(formData);
+
+      toast.success('✅ Perfil salvo!');
+
+    } catch (error) {
+      console.error('Erro:', error);
+      toast.error('❌ Erro ao salvar');
+    }
+  };
+
+  const planColors = {
+    free: 'bg-slate-600',
+    comum: 'bg-blue-600',
+    pro: 'bg-purple-600',
+    ultra: 'bg-gradient-to-r from-yellow-500 to-orange-500'
+  };
+
+  const planNames = {
+    free: 'Gratuito',
+    comum: 'Comum',
+    pro: 'Pro',
+    ultra: 'Ultra'
+  };
+
+  const formLoading = isLoading || loadingUser || loadingUserProfile || updateAuthProfileMutation.isLoading || saveProfileEntityMutation.isLoading;
+
+  if (formLoading && (!user || (user && !userProfile && !loadingUserProfile))) {
+    return (
+      <div className="min-h-screen bg-slate-900 p-4 md:p-8">
+        <div className="max-w-4xl mx-auto space-y-6">
+          <Skeleton className="h-32 bg-slate-800" />
+          <Skeleton className="h-64 bg-slate-800" />
+          <Skeleton className="h-96 bg-slate-800" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-900 p-4 md:p-8">
+      <div className="max-w-4xl mx-auto">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8"
+        >
+          <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">Meu Perfil</h1>
+          <p className="text-slate-400">Gerencie suas informações pessoais e preferências</p>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+        >
+          <Card className="bg-slate-800 border-slate-700 mb-6">
+            <CardHeader>
+              <CardTitle className="text-white flex items-center gap-2">
+                <Shield className="w-5 h-5 text-blue-400" />
+                Informações da Conta
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <Mail className="w-5 h-5 text-slate-400" />
+                  <div>
+                    <p className="text-sm text-slate-400">Email</p>
+                    <p className="text-white font-medium">{user?.email}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <Shield className="w-5 h-5 text-slate-400" />
+                  <div>
+                    <p className="text-sm text-slate-400">Função</p>
+                    <p className="text-white font-medium capitalize">{user?.role}</p>
+                  </div>
+                </div>
+              </div>
+
+              {subscription && (
+                <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-green-400" />
+                    <div>
+                      <p className="text-sm text-slate-400">Plano Atual</p>
+                      <Badge className={`${planColors[subscription.plan]} text-white mt-1`}>
+                        {planNames[subscription.plan]}
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {userProfile && (
+                <>
+                  {userProfile.cpf && (
+                    <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <CreditCard className="w-5 h-5 text-slate-400" />
+                        <div>
+                          <p className="text-sm text-slate-400">CPF</p>
+                          <SensitiveData
+                            value={userProfile.cpf}
+                            type="cpf"
+                            encrypted={userProfile.cpf_encrypted}
+                            allowReveal={true}
+                            allowCopy={true}
+                            showEncryptedBadge={true}
+                            className="text-white font-medium"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {userProfile.phone && (
+                    <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <Phone className="w-5 h-5 text-slate-400" />
+                        <div>
+                          <p className="text-sm text-slate-400">Telefone</p>
+                          <SensitiveData
+                            value={userProfile.phone}
+                            type="phone"
+                            encrypted={userProfile.phone_encrypted}
+                            allowReveal={true}
+                            allowCopy={true}
+                            className="text-white font-medium"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {userProfile.pix_key && (
+                    <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <Mail className="w-5 h-5 text-slate-400" />
+                        <div>
+                          <p className="text-sm text-slate-400">Chave PIX</p>
+                          <SensitiveData
+                            value={userProfile.pix_key}
+                            type="pix"
+                            encrypted={userProfile.pix_key_encrypted}
+                            allowReveal={true}
+                            allowCopy={true}
+                            className="text-white font-medium"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {userProfile.notes && (
+                    <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <NotebookText className="w-5 h-5 text-slate-400" />
+                        <div>
+                          <p className="text-sm text-slate-400">Notas</p>
+                          <p className="text-white font-medium">{userProfile.notes}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <Card className="bg-slate-800 border-slate-700">
+            <CardHeader>
+              <CardTitle className="text-white flex items-center gap-2">
+                <User className="w-5 h-5 text-purple-400" />
+                Editar Perfil
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div className="space-y-2">
+                  <Label htmlFor="full_name" className="text-slate-300">
+                    Nome Completo *
+                  </Label>
+                  <Input
+                    id="full_name"
+                    value={formData.full_name}
+                    onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
+                    className="bg-slate-900 border-slate-700 text-white"
+                    placeholder="Seu nome completo"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="name" className="text-slate-300">
+                    Nome do Perfil (Opcional)
+                  </Label>
+                  <Input
+                    id="name"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="bg-slate-900 border-slate-700 text-white"
+                    placeholder="Nome do perfil"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="cpf" className="text-slate-300">
+                    CPF (Opcional, Criptografado)
+                  </Label>
+                  <Input
+                    id="cpf"
+                    value={formData.cpf}
+                    onChange={(e) => setFormData({ ...formData, cpf: e.target.value })}
+                    className="bg-slate-900 border-slate-700 text-white"
+                    placeholder="Seu CPF"
+                    type="text"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="phone" className="text-slate-300">
+                    Telefone (Opcional, Criptografado)
+                  </Label>
+                  <Input
+                    id="phone"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    className="bg-slate-900 border-slate-700 text-white"
+                    placeholder="Seu telefone"
+                    type="tel"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="pix_key" className="text-slate-300">
+                    Chave PIX (Opcional, Criptografado)
+                  </Label>
+                  <Input
+                    id="pix_key"
+                    value={formData.pix_key}
+                    onChange={(e) => setFormData({ ...formData, pix_key: e.target.value })}
+                    className="bg-slate-900 border-slate-700 text-white"
+                    placeholder="Sua chave PIX"
+                    type="text"
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <Label className="text-slate-300">Tipo de Perfil</Label>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {PROFILE_TYPES.map((type) => {
+                      const Icon = type.icon;
+                      const isSelected = formData.profile_type === type.id;
+
+                      return (
+                        <div
+                          key={type.id}
+                          onClick={() => setFormData({ ...formData, profile_type: type.id })}
+                          className={`
+                            relative cursor-pointer rounded-xl p-4 border-2 transition-all
+                            ${isSelected
+                              ? 'border-blue-500 bg-blue-900/20'
+                              : 'border-slate-700 bg-slate-900/50 hover:border-slate-600'
+                            }
+                          `}
+                        >
+                          {isSelected && (
+                            <div className="absolute top-2 right-2">
+                              <CheckCircle2 className="w-5 h-5 text-blue-400" />
+                            </div>
+                          )}
+
+                          <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${type.color} flex items-center justify-center mb-3`}>
+                            <Icon className="w-6 h-6 text-white" />
+                          </div>
+
+                          <h3 className="text-white font-bold mb-1">{type.title}</h3>
+                          <p className="text-slate-400 text-xs mb-3">{type.description}</p>
+
+                          <div className="space-y-1">
+                            {type.features.map((feature, idx) => (
+                              <p key={idx} className="text-slate-500 text-xs flex items-center gap-1">
+                                <span className="w-1 h-1 bg-slate-600 rounded-full" />
+                                {feature}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-700">
+                  <Button
+                    type="submit"
+                    disabled={formLoading}
+                    className="bg-gradient-to-r from-blue-600 to-blue-500"
+                  >
+                    {formLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Salvando...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4 mr-2" />
+                        Salvar Alterações
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.3 }}
+          className="mt-6 p-4 bg-blue-900/20 border border-blue-700 rounded-lg"
+        >
+          <p className="text-blue-300 text-sm flex items-start gap-2">
+            <Shield className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>
+              <strong>Importante:</strong> Seus dados sensíveis são criptografados automaticamente.
+            </span>
+          </p>
+        </motion.div>
+      </div>
+    </div>
+  );
+}
