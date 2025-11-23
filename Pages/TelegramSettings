@@ -1,0 +1,502 @@
+import React, { useState, useEffect } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { 
+  Send, 
+  MessageCircle, 
+  Link as LinkIcon, 
+  ExternalLink,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
+  Copy,
+  RefreshCw,
+  Bell,
+  Clock,
+  TrendingUp,
+  Target
+} from "lucide-react";
+import { toast } from "sonner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+export default function TelegramSettingsPage() {
+  const queryClient = useQueryClient();
+  const [verificationCode, setVerificationCode] = useState('');
+  const [isLinking, setIsLinking] = useState(false);
+  const [testMessage, setTestMessage] = useState('');
+
+  // Gerar código de verificação único
+  const generateCode = () => {
+    return `BETCONTROL_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+  };
+
+  const [currentCode] = useState(generateCode());
+
+  // Carregar configuração
+  const { data: configs = [], isLoading, refetch } = useQuery({
+    queryKey: ['telegram-config'],
+    queryFn: async () => {
+      const user = await base44.auth.me();
+      return await base44.entities.TelegramConfig.filter({ created_by: user.email });
+    }
+  });
+
+  const config = configs[0];
+  const isLinked = config?.is_active && config?.chat_id;
+
+  // Vincular conta
+  const handleLinkAccount = async () => {
+    if (!verificationCode.trim()) {
+      toast.error('Digite o código de verificação');
+      return;
+    }
+
+    setIsLinking(true);
+    try {
+      const response = await base44.functions.invoke('linkTelegramAccount', {
+        verification_code: verificationCode
+      });
+
+      if (response.data.success) {
+        await refetch();
+        toast.success('✅ Telegram vinculado com sucesso!');
+        setVerificationCode('');
+      } else {
+        toast.error(response.data.error || 'Erro ao vincular');
+      }
+    } catch (error) {
+      console.error('Erro:', error);
+      toast.error('Erro ao vincular conta. Tente novamente.');
+    } finally {
+      setIsLinking(false);
+    }
+  };
+
+  // Desvincular
+  const unlinkMutation = useMutation({
+    mutationFn: async () => {
+      if (config) {
+        await base44.entities.TelegramConfig.update(config.id, {
+          is_active: false,
+          chat_id: null
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['telegram-config']);
+      toast.success('Telegram desvinculado');
+    }
+  });
+
+  // Atualizar notificações
+  const updateNotificationsMutation = useMutation({
+    mutationFn: async (notifications) => {
+      if (config) {
+        await base44.entities.TelegramConfig.update(config.id, { notifications });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['telegram-config']);
+      toast.success('Preferências atualizadas');
+    }
+  });
+
+  // Enviar mensagem de teste
+  const sendTestMutation = useMutation({
+    mutationFn: async () => {
+      const response = await base44.functions.invoke('sendTelegramMessage', {
+        message: testMessage || '✅ Teste de notificação do BetControl Pro!\n\nSuas notificações estão funcionando perfeitamente! 🎉'
+      });
+      return response.data;
+    },
+    onSuccess: () => {
+      toast.success('Mensagem de teste enviada!');
+      setTestMessage('');
+    },
+    onError: (error) => {
+      toast.error('Erro ao enviar mensagem de teste');
+    }
+  });
+
+  const handleToggleNotification = (key, value) => {
+    if (!config) return;
+    
+    const updatedNotifications = {
+      ...config.notifications,
+      [key]: value
+    };
+    
+    updateNotificationsMutation.mutate(updatedNotifications);
+  };
+
+  const copyCode = () => {
+    navigator.clipboard.writeText(currentCode);
+    toast.success('Código copiado!');
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 p-4 md:p-8">
+      <div className="max-w-4xl mx-auto">
+        {/* HEADER */}
+        <div className="mb-8">
+          <h1 className="text-3xl md:text-4xl font-bold text-white flex items-center gap-3">
+            <MessageCircle className="w-8 h-8 text-blue-400" />
+            Notificações Telegram
+          </h1>
+          <p className="text-slate-400 mt-2">
+            Receba alertas e atualizações diretamente no seu Telegram
+          </p>
+        </div>
+
+        {isLoading ? (
+          <div className="space-y-4">
+            <div className="h-64 bg-slate-800 rounded-xl animate-pulse" />
+            <div className="h-96 bg-slate-800 rounded-xl animate-pulse" />
+          </div>
+        ) : !isLinked ? (
+          /* NÃO VINCULADO */
+          <Card className="bg-gradient-to-br from-blue-900/30 to-blue-800/30 border-2 border-blue-700">
+            <CardHeader>
+              <CardTitle className="text-white flex items-center gap-2">
+                <LinkIcon className="w-5 h-5 text-blue-400" />
+                Vincular Telegram
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <Alert className="bg-blue-900/30 border-blue-700">
+                <AlertCircle className="w-4 h-4 text-blue-400" />
+                <AlertDescription className="text-blue-200">
+                  Para receber notificações, você precisa vincular sua conta do Telegram ao BetControl Pro.
+                </AlertDescription>
+              </Alert>
+
+              {/* Instruções */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-white">Como vincular:</h3>
+                
+                <div className="space-y-3">
+                  <div className="flex gap-3 p-4 bg-slate-800 rounded-lg">
+                    <div className="flex-shrink-0 w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold">
+                      1
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-white font-medium mb-2">
+                        Abra o Telegram e busque pelo bot:
+                      </p>
+                      <a 
+                        href="https://t.me/BetControlProBot" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 text-blue-400 hover:text-blue-300 font-medium"
+                      >
+                        @BetControlProBot
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 p-4 bg-slate-800 rounded-lg">
+                    <div className="flex-shrink-0 w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold">
+                      2
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-white font-medium mb-2">
+                        Inicie o bot com o comando <code className="bg-slate-900 px-2 py-1 rounded">/start</code>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 p-4 bg-slate-800 rounded-lg">
+                    <div className="flex-shrink-0 w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold">
+                      3
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-white font-medium mb-2">
+                        Envie EXATAMENTE este código:
+                      </p>
+                      <div className="flex items-center gap-2 mt-2">
+                        <code className="flex-1 bg-slate-900 px-4 py-3 rounded font-mono text-blue-400 text-lg">
+                          {currentCode}
+                        </code>
+                        <Button
+                          size="sm"
+                          onClick={copyCode}
+                          variant="outline"
+                          className="border-blue-600 text-blue-400"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 p-4 bg-slate-800 rounded-lg">
+                    <div className="flex-shrink-0 w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold">
+                      4
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-white font-medium mb-3">
+                        Digite o código enviado e clique em Vincular:
+                      </p>
+                      <div className="flex gap-2">
+                        <Input
+                          value={verificationCode}
+                          onChange={(e) => setVerificationCode(e.target.value.toUpperCase())}
+                          placeholder="BETCONTROL_XXXXXXXX"
+                          className="flex-1 bg-slate-900 border-slate-700 text-white font-mono"
+                        />
+                        <Button
+                          onClick={handleLinkAccount}
+                          disabled={isLinking || !verificationCode.trim()}
+                          className="bg-gradient-to-r from-blue-600 to-blue-500"
+                        >
+                          {isLinking ? (
+                            <>
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              Vinculando...
+                            </>
+                          ) : (
+                            <>
+                              <LinkIcon className="w-4 h-4 mr-2" />
+                              Vincular
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <Alert className="bg-yellow-900/20 border-yellow-700">
+                <AlertCircle className="w-4 h-4 text-yellow-400" />
+                <AlertDescription className="text-yellow-200">
+                  <strong>Importante:</strong> O código é sensível a maiúsculas/minúsculas. 
+                  Copie exatamente como está exibido.
+                </AlertDescription>
+              </Alert>
+            </CardContent>
+          </Card>
+        ) : (
+          /* VINCULADO */
+          <Tabs defaultValue="status" className="space-y-6">
+            <TabsList className="grid w-full grid-cols-3 bg-slate-800">
+              <TabsTrigger value="status">Status</TabsTrigger>
+              <TabsTrigger value="notifications">Notificações</TabsTrigger>
+              <TabsTrigger value="test">Testar</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="status" className="space-y-6">
+              {/* Status */}
+              <Card className="bg-gradient-to-br from-green-900/30 to-green-800/30 border-2 border-green-700">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-green-400" />
+                    Telegram Conectado
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-green-200 mb-1">
+                        Sua conta está vinculada e pronta para receber notificações!
+                      </p>
+                      <p className="text-sm text-green-300">
+                        Chat ID: <code className="bg-slate-900 px-2 py-1 rounded">{config.chat_id}</code>
+                      </p>
+                    </div>
+                    <Button
+                      onClick={() => unlinkMutation.mutate()}
+                      variant="outline"
+                      size="sm"
+                      className="border-red-600 text-red-400 hover:bg-red-900/20"
+                    >
+                      Desvincular
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Estatísticas */}
+              <Card className="bg-slate-800 border-slate-700">
+                <CardHeader>
+                  <CardTitle className="text-white">Estatísticas</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    <div className="p-4 bg-slate-900 rounded-lg">
+                      <div className="flex items-center gap-2 text-blue-400 mb-2">
+                        <Bell className="w-4 h-4" />
+                        <span className="text-sm">Notificações Ativas</span>
+                      </div>
+                      <p className="text-2xl font-bold text-white">
+                        {Object.values(config.notifications || {}).filter(Boolean).length}
+                      </p>
+                    </div>
+
+                    <div className="p-4 bg-slate-900 rounded-lg">
+                      <div className="flex items-center gap-2 text-green-400 mb-2">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span className="text-sm">Status</span>
+                      </div>
+                      <p className="text-lg font-bold text-green-400">
+                        Ativo
+                      </p>
+                    </div>
+
+                    <div className="p-4 bg-slate-900 rounded-lg">
+                      <div className="flex items-center gap-2 text-purple-400 mb-2">
+                        <Clock className="w-4 h-4" />
+                        <span className="text-sm">Última Notificação</span>
+                      </div>
+                      <p className="text-sm font-medium text-white">
+                        {config.last_notification_at 
+                          ? new Date(config.last_notification_at).toLocaleString('pt-BR')
+                          : 'Nenhuma'
+                        }
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="notifications" className="space-y-6">
+              {/* Preferências de Notificação */}
+              <Card className="bg-slate-800 border-slate-700">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <Bell className="w-5 h-5 text-blue-400" />
+                    Preferências de Notificação
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center justify-between p-4 bg-slate-900 rounded-lg">
+                    <div>
+                      <p className="text-white font-medium">Resultados de Apostas</p>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Receba quando uma aposta for finalizada (green/red)
+                      </p>
+                    </div>
+                    <Switch
+                      checked={config.notifications?.bet_results || false}
+                      onCheckedChange={(value) => handleToggleNotification('bet_results', value)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-4 bg-slate-900 rounded-lg">
+                    <div>
+                      <p className="text-white font-medium">Apostas Começando</p>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Alerta 1h antes do evento começar
+                      </p>
+                    </div>
+                    <Switch
+                      checked={config.notifications?.bet_starting_soon || false}
+                      onCheckedChange={(value) => handleToggleNotification('bet_starting_soon', value)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-4 bg-slate-900 rounded-lg">
+                    <div>
+                      <p className="text-white font-medium">Metas Atingidas</p>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Notificação quando você bater uma meta
+                      </p>
+                    </div>
+                    <Switch
+                      checked={config.notifications?.goals_achieved || false}
+                      onCheckedChange={(value) => handleToggleNotification('goals_achieved', value)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-4 bg-slate-900 rounded-lg">
+                    <div>
+                      <p className="text-white font-medium">Resumo Diário</p>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Relatório automático todos os dias às 20h
+                      </p>
+                    </div>
+                    <Switch
+                      checked={config.notifications?.daily_summary || false}
+                      onCheckedChange={(value) => handleToggleNotification('daily_summary', value)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-4 bg-slate-900 rounded-lg">
+                    <div>
+                      <p className="text-white font-medium">Resumo Semanal</p>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Relatório completo toda segunda às 9h
+                      </p>
+                    </div>
+                    <Switch
+                      checked={config.notifications?.weekly_summary || false}
+                      onCheckedChange={(value) => handleToggleNotification('weekly_summary', value)}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="test" className="space-y-6">
+              {/* Teste */}
+              <Card className="bg-slate-800 border-slate-700">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <Send className="w-5 h-5 text-purple-400" />
+                    Testar Notificação
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <Label className="text-white">Mensagem de Teste (opcional)</Label>
+                    <Input
+                      value={testMessage}
+                      onChange={(e) => setTestMessage(e.target.value)}
+                      placeholder="Digite uma mensagem personalizada ou deixe em branco"
+                      className="mt-2 bg-slate-900 border-slate-700 text-white"
+                    />
+                  </div>
+                  
+                  <Button
+                    onClick={() => sendTestMutation.mutate()}
+                    disabled={sendTestMutation.isPending}
+                    className="w-full bg-gradient-to-r from-purple-600 to-purple-500"
+                  >
+                    {sendTestMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Enviando...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4 mr-2" />
+                        Enviar Mensagem de Teste
+                      </>
+                    )}
+                  </Button>
+
+                  <Alert className="bg-blue-900/20 border-blue-700">
+                    <AlertCircle className="w-4 h-4 text-blue-400" />
+                    <AlertDescription className="text-blue-200">
+                      A mensagem será enviada para o seu Telegram imediatamente. 
+                      Verifique se recebeu!
+                    </AlertDescription>
+                  </Alert>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        )}
+      </div>
+    </div>
+  );
+}
