@@ -1,0 +1,310 @@
+import React, { useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { 
+  BookOpen, 
+  Play, 
+  CheckCircle2,
+  Sparkles,
+  Target,
+  Calculator,
+  TrendingUp,
+  Wallet,
+  Gift,
+  LayoutDashboard,
+  PlusCircle,
+  Calendar,
+  X,
+  ChevronRight,
+  Lightbulb
+} from "lucide-react";
+import { getAllTutorials, getQuickGuide } from "../components/tutorial/tutorialContent";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+
+export default function TutorialPage() {
+  const navigate = useNavigate();
+  const [selectedTutorial, setSelectedTutorial] = useState(null);
+
+  const tutorials = getAllTutorials();
+
+  const tutorialCategories = [
+    {
+      title: '🚀 Primeiros Passos',
+      icon: Sparkles,
+      color: 'from-blue-600 to-purple-600',
+      tutorials: ['dashboard', 'addBet', 'wallets']
+    },
+    {
+      title: '🧮 Calculadoras',
+      icon: Calculator,
+      color: 'from-purple-600 to-pink-600',
+      tutorials: ['calculators']
+    },
+    {
+      title: '📊 Gestão Avançada',
+      icon: TrendingUp,
+      color: 'from-green-600 to-emerald-600',
+      tutorials: ['bets', 'analytics']
+    },
+    {
+      title: '🎁 Recursos Extras',
+      icon: Gift,
+      color: 'from-orange-600 to-red-600',
+      tutorials: ['upcomingMatches']
+    }
+  ];
+
+  const quickGuides = [
+    { 
+      id: 'firstBet', 
+      title: 'Primeira Aposta em 3 Min', 
+      icon: Sparkles,
+      description: 'Aprenda a registrar sua primeira aposta rapidamente',
+      steps: '5 passos simples'
+    },
+    { 
+      id: 'surebet', 
+      title: 'Como Fazer Surebet', 
+      icon: Target,
+      description: 'Guia completo para lucro garantido',
+      steps: 'Estratégia avançada'
+    },
+    { 
+      id: 'freebet', 
+      title: 'Extrair Freebet', 
+      icon: Gift,
+      description: 'Maximize o valor dos seus bônus',
+      steps: 'Técnica profissional'
+    }
+  ];
+
+  const getTutorialIcon = (id) => {
+    const icons = {
+      dashboard: LayoutDashboard,
+      addBet: PlusCircle,
+      calculators: Calculator,
+      bets: TrendingUp,
+      upcomingMatches: Calendar,
+      wallets: Wallet,
+      analytics: TrendingUp
+    };
+    return icons[id] || BookOpen;
+  };
+
+  return (
+    <div className="min-h-screen w-full bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4 md:p-8">
+      <div className="max-w-7xl mx-auto pb-20">
+        
+        {/* HEADER */}
+        <div className="text-center mb-12">
+          <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-2xl">
+            <BookOpen className="w-10 h-10 text-white" />
+          </div>
+          <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">
+            📚 Central de Tutoriais
+          </h1>
+          <p className="text-slate-300 text-lg max-w-2xl mx-auto">
+            Aprenda a usar todas as funcionalidades do BetControl Pro com guias passo-a-passo
+          </p>
+        </div>
+
+        {/* QUICK START */}
+        <div className="mb-12">
+          <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+            <Sparkles className="w-6 h-6 text-yellow-400" />
+            ⚡ Início Rápido
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {quickGuides.map((guide) => {
+              const Icon = guide.icon;
+              
+              return (
+                <Card 
+                  key={guide.id}
+                  className="bg-slate-800/50 border-slate-700 hover:border-blue-500 transition-all cursor-pointer group"
+                  onClick={() => {
+                    if (guide.id === 'firstBet') navigate(createPageUrl('AddBet'));
+                    if (guide.id === 'surebet') navigate(createPageUrl('SurebetCalculator'));
+                    if (guide.id === 'freebet') navigate(createPageUrl('FreebetCalculator'));
+                  }}
+                >
+                  <CardContent className="p-6">
+                    <div className="flex items-start gap-4">
+                      <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform shadow-lg">
+                        <Icon className="w-6 h-6 text-white" />
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="text-white font-bold mb-2">{guide.title}</h3>
+                        <p className="text-slate-400 text-sm mb-3">{guide.description}</p>
+                        <Badge className="bg-blue-600">{guide.steps}</Badge>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* TUTORIAIS POR CATEGORIA */}
+        <div>
+          <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+            <BookOpen className="w-6 h-6 text-blue-400" />
+            📖 Tutoriais Completos
+          </h2>
+          
+          {tutorialCategories.map((category) => {
+            const Icon = category.icon;
+            const categoryTutorials = tutorials.filter(t => category.tutorials.includes(t.id));
+            
+            return (
+              <div key={category.title} className="mb-8">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className={`w-10 h-10 bg-gradient-to-r ${category.color} rounded-lg flex items-center justify-center shadow-lg`}>
+                    <Icon className="w-6 h-6 text-white" />
+                  </div>
+                  <h3 className="text-xl font-bold text-white">{category.title}</h3>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {categoryTutorials.map((tutorial) => {
+                    const TutIcon = getTutorialIcon(tutorial.id);
+                    
+                    return (
+                      <Card 
+                        key={tutorial.id}
+                        className="bg-slate-800/50 border-slate-700 hover:border-blue-500 transition-all cursor-pointer group"
+                        onClick={() => setSelectedTutorial(tutorial)}
+                      >
+                        <CardContent className="p-6">
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="w-12 h-12 bg-slate-700 rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
+                              <TutIcon className="w-6 h-6 text-blue-400" />
+                            </div>
+                            <Badge className="bg-blue-600">
+                              {tutorial.steps.length} passos
+                            </Badge>
+                          </div>
+                          
+                          <h4 className="text-white font-bold text-lg mb-2">
+                            {tutorial.title}
+                          </h4>
+                          <p className="text-slate-400 text-sm mb-4 line-clamp-2">
+                            {tutorial.description}
+                          </p>
+
+                          <Button 
+                            size="sm" 
+                            className="w-full bg-gradient-to-r from-blue-600 to-blue-500"
+                          >
+                            <Play className="w-4 h-4 mr-2" />
+                            Iniciar Tutorial
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* DICAS ÚTEIS */}
+        <Alert className="bg-blue-900/20 border-blue-700">
+          <Lightbulb className="w-5 h-5 text-blue-400" />
+          <AlertDescription className="text-blue-200 ml-3">
+            <strong>💡 Dica Pro:</strong> Você pode acessar tutoriais contextuais clicando no ícone de ajuda (❓) que aparece em cada página do app!
+          </AlertDescription>
+        </Alert>
+
+        {/* MODAL DE TUTORIAL */}
+        {selectedTutorial && (
+          <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-50 overflow-y-auto">
+            <div className="bg-slate-900 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto border-2 border-blue-500 my-8">
+              <div className="sticky top-0 bg-slate-900 border-b border-slate-700 p-6 flex items-center justify-between z-10">
+                <h2 className="text-2xl md:text-3xl font-bold text-white">
+                  {selectedTutorial.title}
+                </h2>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setSelectedTutorial(null)}
+                  className="text-slate-400 hover:text-white"
+                >
+                  <X className="w-6 h-6" />
+                </Button>
+              </div>
+
+              <div className="p-6 space-y-6">
+                {selectedTutorial.steps.map((step, idx) => (
+                  <Card key={idx} className="bg-slate-800 border-slate-700">
+                    <CardContent className="p-6">
+                      <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-purple-600 rounded-full flex items-center justify-center text-white font-bold text-lg shrink-0 shadow-lg">
+                          {idx + 1}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-3">
+                            <span className="text-2xl">{step.icon}</span>
+                            <h3 className="text-white font-bold text-lg">
+                              {step.title}
+                            </h3>
+                          </div>
+                          <div className="text-slate-300 prose prose-sm max-w-none">
+                            {typeof step.description === 'string' ? (
+                              <p>{step.description}</p>
+                            ) : (
+                              step.description
+                            )}
+                          </div>
+                          
+                          {step.tips && step.tips.length > 0 && (
+                            <div className="mt-4 bg-blue-900/20 border border-blue-700/50 rounded-lg p-4">
+                              <p className="text-blue-300 font-semibold mb-2 flex items-center gap-2">
+                                <Lightbulb className="w-4 h-4" />
+                                💡 Dicas Importantes:
+                              </p>
+                              <ul className="space-y-1 text-blue-200 text-sm">
+                                {step.tips.map((tip, tipIdx) => (
+                                  <li key={tipIdx} className="flex items-start gap-2">
+                                    <span className="text-blue-400 mt-0.5">•</span>
+                                    <span>{tip}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+
+                <div className="flex justify-end gap-3 pt-4 sticky bottom-0 bg-slate-900 pb-2">
+                  <Button
+                    onClick={() => setSelectedTutorial(null)}
+                    variant="outline"
+                    className="border-slate-700 text-slate-300"
+                  >
+                    Fechar
+                  </Button>
+                  <Button
+                    onClick={() => setSelectedTutorial(null)}
+                    className="bg-gradient-to-r from-green-600 to-emerald-600"
+                  >
+                    <CheckCircle2 className="w-5 h-5 mr-2" />
+                    Tutorial Completo!
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
