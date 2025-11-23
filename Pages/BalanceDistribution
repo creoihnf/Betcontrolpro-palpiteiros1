@@ -1,0 +1,734 @@
+
+import React, { useState, useEffect, useMemo } from 'react';
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Heart, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Settings, History, Target, Shield, Activity, BarChart3, X, ArrowRight, Wallet, Building2, Landmark, DollarSign, PieChart, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { motion } from "framer-motion";
+import StatCard from "../components/dashboard/StatCard"; // Added based on outline, assuming it's a shared component
+
+/**
+ * 📊 DISTRIBUIÇÃO DE CAPITAL - COMPLETO
+ * 
+ * ✅ P0 CRITICAL FIX: Visão Geral Implementada
+ * - Alocação por Contas (Principal + Terceiros)
+ * - Alocação por Bancos
+ * - Alocação por Casas de Apostas
+ * - Sincronização automática
+ * - Health Score
+ * - Alertas de rebalanceamento
+ */
+
+export default function BalanceDistributionPage() {
+  const queryClient = useQueryClient();
+  const [currentUser, setCurrentUser] = useState(null);
+  const [healthData, setHealthData] = useState(null);
+  const [selectedTab, setSelectedTab] = useState('overview');
+
+  useEffect(() => {
+    loadUser();
+  }, []);
+
+  const loadUser = async () => {
+    const user = await base44.auth.me();
+    setCurrentUser(user);
+  };
+
+  // ✅ QUERIES COM SINCRONIZAÇÃO AUTOMÁTICA
+  const { data: config, refetch: refetchConfig } = useQuery({
+    queryKey: ['rebalance-config', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return null;
+      const configs = await base44.entities.RebalanceConfig.filter({ user_id: currentUser.email });
+      return configs[0] || null;
+    },
+    enabled: !!currentUser,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
+  });
+
+  const { data: alerts = [], refetch: refetchAlerts } = useQuery({
+    queryKey: ['rebalance-alerts', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.RebalanceAlert.filter({ user_id: currentUser.email, status: 'active' });
+    },
+    enabled: !!currentUser,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
+  });
+
+  const { data: history = [], refetch: refetchHistory } = useQuery({
+    queryKey: ['rebalance-history', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.RebalanceHistory.filter({ user_id: currentUser.email });
+    },
+    enabled: !!currentUser,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
+  });
+
+  const { data: wallets = [], refetch: refetchWallets } = useQuery({
+    queryKey: ['wallets'],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.Wallet.filter({ created_by: currentUser.email, is_active: true });
+    },
+    enabled: !!currentUser,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
+  });
+
+  const { data: bookmakers = [], refetch: refetchBookmakers } = useQuery({
+    queryKey: ['bookmakers'],
+    queryFn: async () => {
+      return await base44.entities.Bookmaker.list();
+    },
+    staleTime: 60000,
+  });
+
+  const { data: banks = [], refetch: refetchBanks } = useQuery({
+    queryKey: ['banks'],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.BankAccount.filter({ created_by: currentUser.email, is_active: true });
+    },
+    enabled: !!currentUser,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
+  });
+
+  const { data: profiles = [], refetch: refetchProfiles } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.Profile.filter({ created_by: currentUser.email, is_active: true });
+    },
+    enabled: !!currentUser,
+    staleTime: 30000,
+  });
+
+  // ✅ ATUALIZAÇÃO MANUAL FORÇADA
+  const handleManualRefresh = async () => {
+    await Promise.all([
+      refetchWallets(),
+      refetchBookmakers(),
+      refetchBanks(),
+      refetchProfiles(),
+      refetchConfig(),
+      refetchAlerts(),
+      refetchHistory()
+    ]);
+    
+    await loadHealthScore();
+    
+    toast.success('✅ Distribuição atualizada!');
+  };
+
+  const updateConfigMutation = useMutation({
+    mutationFn: async (newConfig) => {
+      if (config) {
+        return await base44.entities.RebalanceConfig.update(config.id, newConfig);
+      } else {
+        return await base44.entities.RebalanceConfig.create({ ...newConfig, user_id: currentUser.email });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rebalance-config'] });
+      toast.success('✅ Configuração atualizada!');
+    }
+  });
+
+  const dismissAlertMutation = useMutation({
+    mutationFn: async (alertId) => {
+      return await base44.entities.RebalanceAlert.update(alertId, {
+        status: 'dismissed',
+        dismissed_at: new Date().toISOString()
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rebalance-alerts'] });
+      toast.success('✅ Alerta dispensado!');
+    }
+  });
+
+  useEffect(() => {
+    if (currentUser) {
+      loadHealthScore();
+    }
+  }, [currentUser]);
+
+  const loadHealthScore = async () => {
+    try {
+      const response = await base44.functions.invoke('calculateHealthScore', { userId: currentUser.email });
+      if (response.data?.success) {
+        setHealthData(response.data);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar health score:', error);
+    }
+  };
+
+  // ✅ CALCULAR ALOCAÇÃO TOTAL
+  const allocationData = useMemo(() => {
+    let totalCapital = 0;
+    const byWallet = [];
+    const byBank = [];
+    const byBookmaker = {};
+
+    // 1. POR CONTA
+    wallets.forEach(wallet => {
+      const profile = wallet.profile_id ? profiles.find(p => p.id === wallet.profile_id) : null;
+      
+      const bankBalance = wallet.bank_balance || 0;
+      const bookmakerBalances = wallet.bookmaker_balances || {};
+      const totalBookmakers = Object.values(bookmakerBalances).reduce((sum, bal) => sum + (parseFloat(bal) || 0), 0);
+      
+      const walletTotal = bankBalance + totalBookmakers;
+      totalCapital += walletTotal;
+
+      byWallet.push({
+        id: wallet.id,
+        name: wallet.is_main_account ? 'Principal' : (profile?.name || wallet.name),
+        color: profile?.color || '#3b82f6',
+        isMain: wallet.is_main_account,
+        bankBalance,
+        bookmakerBalances: totalBookmakers, // Changed from `bookmakersBalance` to `bookmakerBalances` for consistency with outline
+        total: walletTotal
+      });
+
+      // Por casa
+      Object.entries(bookmakerBalances).forEach(([bookmakerId, balance]) => {
+        const bal = parseFloat(balance) || 0;
+        if (bal > 0) {
+          if (!byBookmaker[bookmakerId]) {
+            byBookmaker[bookmakerId] = 0;
+          }
+          byBookmaker[bookmakerId] += bal;
+        }
+      });
+    });
+
+    // 2. POR BANCO
+    banks.forEach(bank => {
+      const balance = bank.balance || 0;
+      totalCapital += balance;
+
+      byBank.push({
+        id: bank.id,
+        name: bank.bank_name,
+        balance,
+        walletId: bank.wallet_id
+      });
+    });
+
+    // 3. CONVERTER BOOKMAKERS EM ARRAY
+    const byBookmakerArray = Object.entries(byBookmaker).map(([id, balance]) => {
+      const bookmaker = bookmakers.find(b => b.id === id);
+      return {
+        id,
+        name: bookmaker?.name || 'Casa Desconhecida',
+        balance,
+        percentage: totalCapital > 0 ? (balance / totalCapital) * 100 : 0
+      };
+    }).sort((a, b) => b.balance - a.balance);
+
+    return {
+      totalCapital,
+      byWallet: byWallet.sort((a, b) => b.total - a.total),
+      byBank: byBank.sort((a, b) => b.balance - a.balance),
+      byBookmaker: byBookmakerArray
+    };
+  }, [wallets, banks, bookmakers, profiles]);
+
+  const getSeverityColor = (severity) => {
+    switch (severity) {
+      case 'critical': return 'bg-red-500';
+      case 'high': return 'bg-orange-500';
+      case 'medium': return 'bg-yellow-500';
+      case 'low': return 'bg-blue-500';
+      default: return 'bg-gray-500';
+    }
+  };
+
+  const getAlertTypeLabel = (type) => {
+    switch (type) {
+      case 'excess_balance': return 'Excesso de Saldo';
+      case 'insufficient_balance': return 'Saldo Insuficiente';
+      case 'concentration_risk': return 'Concentração de Risco';
+      case 'opportunity': return 'Oportunidade';
+      default: return type;
+    }
+  };
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950">
+        <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ width: '100%', minHeight: '100vh', padding: '24px 32px', background: '#0a0a0a' }}>
+      <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+
+        {/* HEADER */}
+        <motion.div 
+          style={{ marginBottom: '32px' }}
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+            <div>
+              <h1 style={{
+                fontSize: '32px',
+                fontWeight: 900,
+                letterSpacing: '-1px',
+                color: '#ffffff',
+                marginBottom: '8px'
+              }}>
+                Distribuição de Saldo
+              </h1>
+              <p style={{ color: 'rgba(176, 176, 176, 0.8)', fontSize: '14px', fontWeight: 500 }}>
+                Visualize e otimize a distribuição do seu capital
+              </p>
+            </div>
+
+            <Button onClick={handleManualRefresh} variant="outline" className="border-slate-700 text-slate-300">
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Atualizar
+            </Button>
+          </div>
+        </motion.div>
+
+        {/* MÉTRICAS */}
+        <motion.div 
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px', marginBottom: '24px' }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+        >
+          {healthData && (
+            <Card className="bg-gradient-to-br from-slate-800/50 to-slate-900/50 border-slate-700">
+              <CardContent className="pt-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="flex items-center gap-4">
+                    <span className="text-6xl">{healthData.emoji}</span>
+                    <div>
+                      <p className="text-5xl font-bold text-white">{healthData.score}</p>
+                      <p className="text-slate-400">de 100</p>
+                      <Badge className={`mt-2 bg-${healthData.color}-600`}>{healthData.classification}</Badge>
+                    </div>
+                  </div>
+
+                  <div className="md:col-span-2 grid grid-cols-2 gap-3">
+                    {[
+                      { key: 'diversification', label: 'Diversificação', icon: Shield, color: 'blue' },
+                      { key: 'balance', label: 'Balanço Ideal', icon: Target, color: 'green' },
+                      { key: 'exposure', label: 'Exposição', icon: Activity, color: 'purple' },
+                      { key: 'alerts', label: 'Alertas', icon: BarChart3, color: 'yellow' }
+                    ].map(({ key, label, icon: Icon, color }) => {
+                      const factor = healthData.factors?.[key];
+                      if (!factor) return null;
+                      
+                      return (
+                        <div key={key} className="bg-slate-900/50 rounded-lg p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <Icon className={`w-4 h-4 text-${color}-400`} />
+                              <p className="text-sm text-slate-300">{label}</p>
+                            </div>
+                            <p className="text-lg font-bold text-white">{factor.percentage}%</p>
+                          </div>
+                          <Progress value={factor.percentage} className="h-2" />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </motion.div>
+
+        {/* GRÁFICOS */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <Tabs value={selectedTab} onValueChange={setSelectedTab}>
+            <TabsList className="bg-slate-800/50 border border-slate-700">
+              <TabsTrigger value="overview" className="data-[state=active]:bg-blue-600">
+                <PieChart className="w-4 h-4 mr-2" />
+                Visão Geral
+              </TabsTrigger>
+              <TabsTrigger value="alerts" className="data-[state=active]:bg-orange-600">
+                <AlertTriangle className="w-4 h-4 mr-2" />
+                Alertas ({alerts.length})
+              </TabsTrigger>
+              <TabsTrigger value="config" className="data-[state=active]:bg-purple-600">
+                <Settings className="w-4 h-4 mr-2" />
+                Configurações
+              </TabsTrigger>
+              <TabsTrigger value="history" className="data-[state=active]:bg-slate-600">
+                <History className="w-4 h-4 mr-2" />
+                Histórico
+              </TabsTrigger>
+            </TabsList>
+
+            {/* ✅ VISÃO GERAL - NOVO */}
+            <TabsContent value="overview" className="space-y-6 mt-6">
+              
+              {/* RESUMO FINANCEIRO */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <Card className="bg-gradient-to-br from-blue-900/40 to-blue-800/40 border-blue-700">
+                  <CardContent className="pt-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-blue-300 text-sm">Capital Total</p>
+                      <DollarSign className="w-5 h-5 text-blue-400" />
+                    </div>
+                    <p className="text-3xl font-bold text-white">
+                      R$ {allocationData.totalCapital.toFixed(2)}
+                    </p>
+                    <p className="text-xs text-blue-200 mt-2">
+                      {allocationData.byWallet.length} conta(s)
+                    </p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-purple-900/40 to-purple-800/40 border-purple-700">
+                  <CardContent className="pt-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-purple-300 text-sm">Em Bancos</p>
+                      <Landmark className="w-5 h-5 text-purple-400" />
+                    </div>
+                    <p className="text-3xl font-bold text-white">
+                      R$ {allocationData.byBank.reduce((sum, b) => sum + b.balance, 0).toFixed(2)}
+                    </p>
+                    <p className="text-xs text-purple-200 mt-2">
+                      {allocationData.byBank.length} banco(s)
+                    </p>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-gradient-to-br from-green-900/40 to-green-800/40 border-green-700">
+                  <CardContent className="pt-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-green-300 text-sm">Em Casas</p>
+                      <Building2 className="w-5 h-5 text-green-400" />
+                    </div>
+                    <p className="text-3xl font-bold text-white">
+                      R$ {allocationData.byBookmaker.reduce((sum, b) => sum + b.balance, 0).toFixed(2)}
+                    </p>
+                    <p className="text-xs text-green-200 mt-2">
+                      {allocationData.byBookmaker.length} casa(s)
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* ALOCAÇÃO POR CONTA */}
+              <Card className="bg-slate-800/50 border-slate-700">
+                <CardHeader>
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <Wallet className="w-5 h-5 text-blue-400" />
+                    Alocação por Conta
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {allocationData.byWallet.length === 0 ? (
+                    <p className="text-slate-400 text-center py-8">Nenhuma conta cadastrada</p>
+                  ) : (
+                    allocationData.byWallet.map(wallet => {
+                      const percentage = allocationData.totalCapital > 0 
+                        ? (wallet.total / allocationData.totalCapital) * 100 
+                        : 0;
+
+                      return (
+                        <div key={wallet.id} className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div
+                                className="w-3 h-3 rounded-full"
+                                style={{ backgroundColor: wallet.color }}
+                              />
+                              <span className="text-white font-medium">{wallet.name}</span>
+                              {wallet.isMain && (
+                                <Badge className="bg-blue-600 text-xs">Principal</Badge>
+                              )}
+                            </div>
+                            <div className="text-right">
+                              <p className="text-white font-bold">R$ {wallet.total.toFixed(2)}</p>
+                              <p className="text-xs text-slate-400">{percentage.toFixed(1)}%</p>
+                            </div>
+                          </div>
+
+                          <Progress value={percentage} className="h-2" />
+
+                          {/* DETALHAMENTO */}
+                          {(wallet.bankBalance > 0 || wallet.bookmakerBalances > 0) && ( // Updated from bookmakersBalance
+                            <div className="ml-6 mt-2 p-3 bg-slate-900/50 rounded-lg text-xs space-y-1">
+                              {wallet.bankBalance > 0 && (
+                                <div className="flex items-center justify-between text-slate-300">
+                                  <span>🏦 Banco</span>
+                                  <span className="font-semibold">R$ {wallet.bankBalance.toFixed(2)}</span>
+                                </div>
+                              )}
+                              {wallet.bookmakerBalances > 0 && ( // Updated from bookmakersBalance
+                                <div className="flex items-center justify-between text-slate-300">
+                                  <span>🏢 Casas</span>
+                                  <span className="font-semibold">R$ {wallet.bookmakerBalances.toFixed(2)}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* ALOCAÇÃO POR BANCO */}
+              {allocationData.byBank.length > 0 && (
+                <Card className="bg-slate-800/50 border-slate-700">
+                  <CardHeader>
+                    <CardTitle className="text-white flex items-center gap-2">
+                      <Landmark className="w-5 h-5 text-purple-400" />
+                      Alocação por Banco
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {allocationData.byBank.map(bank => {
+                      const percentage = allocationData.totalCapital > 0 
+                        ? (bank.balance / allocationData.totalCapital) * 100 
+                        : 0;
+
+                      return (
+                        <div key={bank.id} className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <Landmark className="w-4 h-4 text-purple-400" />
+                              <span className="text-white font-medium">{bank.name}</span>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-white font-bold">R$ {bank.balance.toFixed(2)}</p>
+                              <p className="text-xs text-slate-400">{percentage.toFixed(1)}%</p>
+                            </div>
+                          </div>
+                          <Progress value={percentage} className="h-2" />
+                        </div>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* ALOCAÇÃO POR CASA */}
+              {allocationData.byBookmaker.length > 0 && (
+                <Card className="bg-slate-800/50 border-slate-700">
+                  <CardHeader>
+                    <CardTitle className="text-white flex items-center gap-2">
+                      <Building2 className="w-5 h-5 text-green-400" />
+                      Alocação por Casa de Apostas
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {allocationData.byBookmaker.map(bookmaker => (
+                      <div key={bookmaker.id} className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <Building2 className="w-4 h-4 text-green-400" />
+                            <span className="text-white font-medium">{bookmaker.name}</span>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-white font-bold">R$ {bookmaker.balance.toFixed(2)}</p>
+                            <p className="text-xs text-slate-400">{bookmaker.percentage.toFixed(1)}%</p>
+                          </div>
+                        </div>
+                        <Progress value={bookmaker.percentage} className="h-2" />
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+
+            {/* ALERTAS */}
+            <TabsContent value="alerts" className="space-y-4 mt-6">
+              {alerts.length === 0 ? (
+                <Card className="bg-slate-800/50 border-slate-700">
+                  <CardContent className="text-center py-12">
+                    <CheckCircle className="w-16 h-16 text-green-400 mx-auto mb-4" />
+                    <p className="text-white text-lg font-semibold">Nenhum alerta ativo!</p>
+                    <p className="text-slate-400 text-sm mt-2">Sua distribuição de capital está equilibrada</p>
+                  </CardContent>
+                </Card>
+              ) : (
+                alerts.map(alert => {
+                  const wallet = wallets.find(w => w.id === alert.wallet_id);
+                  
+                  return (
+                    <Card key={alert.id} className="bg-slate-800/50 border-l-4 border-orange-500">
+                      <CardContent className="pt-6">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Badge className={getSeverityColor(alert.severity)}>{alert.severity}</Badge>
+                              <p className="text-white font-semibold">{getAlertTypeLabel(alert.alert_type)}</p>
+                            </div>
+                            
+                            <p className="text-slate-300 mb-2">
+                              Conta: <strong>{wallet?.name || 'Desconhecida'}</strong>
+                            </p>
+                            
+                            <div className="bg-slate-900/50 rounded-lg p-3 mb-3">
+                              <div className="grid grid-cols-3 gap-4 text-sm">
+                                <div>
+                                  <p className="text-slate-400">Atual</p>
+                                  <p className="text-white font-bold">R$ {alert.current_balance?.toFixed(2)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-slate-400">Ideal</p>
+                                  <p className="text-green-400 font-bold">R$ {alert.ideal_balance?.toFixed(2)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-slate-400">Desvio</p>
+                                  <p className="text-orange-400 font-bold">{alert.deviation_percentage?.toFixed(1)}%</p>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div className="bg-blue-900/20 border border-blue-700/50 rounded-lg p-3">
+                              <p className="text-blue-200 text-sm font-medium mb-1">💡 Recomendação:</p>
+                              <p className="text-blue-300 text-sm">{alert.suggested_action}</p>
+                              {alert.suggested_amount && (
+                                <p className="text-blue-400 text-sm mt-2 flex items-center gap-2">
+                                  <ArrowRight className="w-4 h-4" />
+                                  Valor sugerido: <strong>R$ {alert.suggested_amount.toFixed(2)}</strong>
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => dismissAlertMutation.mutate(alert.id)}
+                            className="text-slate-400 hover:text-red-400"
+                          >
+                            <X className="w-5 h-5" />
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })
+              )}
+            </TabsContent>
+
+            {/* CONFIGURAÇÕES */}
+            <TabsContent value="config" className="mt-6">
+              <Card className="bg-slate-800/50 border-slate-700">
+                <CardHeader>
+                  <CardTitle className="text-white">Configurações do Sistema</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label className="text-white">Sistema Ativado</Label>
+                      <p className="text-sm text-slate-400">Habilitar análise e alertas</p>
+                    </div>
+                    <Switch
+                      checked={config?.enabled ?? true}
+                      onCheckedChange={(checked) => updateConfigMutation.mutate({ enabled: checked })}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-white">Sensibilidade</Label>
+                    <Select
+                      value={config?.sensitivity || 'medium'}
+                      onValueChange={(value) => updateConfigMutation.mutate({ sensitivity: value })}
+                    >
+                      <SelectTrigger className="bg-slate-900 border-slate-700 text-white">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        <SelectItem value="low">Baixa</SelectItem>
+                        <SelectItem value="medium">Média</SelectItem>
+                        <SelectItem value="high">Alta</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label className="text-white">Considerar Apostas Pendentes</Label>
+                      <p className="text-sm text-slate-400">Incluir saldo em jogo na análise</p>
+                    </div>
+                    <Switch
+                      checked={config?.consider_pending_bets ?? true}
+                      onCheckedChange={(checked) => updateConfigMutation.mutate({ consider_pending_bets: checked })}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label className="text-white">Considerar Promoções Ativas</Label>
+                      <p className="text-sm text-slate-400">Ignorar alertas em contas com promoções</p>
+                    </div>
+                    <Switch
+                      checked={config?.consider_active_promotions ?? true}
+                      onCheckedChange={(checked) => updateConfigMutation.mutate({ consider_active_promotions: checked })}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* HISTÓRICO */}
+            <TabsContent value="history" className="mt-6">
+              <Card className="bg-slate-800/50 border-slate-700">
+                <CardHeader>
+                  <CardTitle className="text-white">Histórico de Rebalanceamentos</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {history.length === 0 ? (
+                    <p className="text-slate-400 text-center py-8">Nenhum rebalanceamento registrado</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {history.slice(0, 10).map(item => (
+                        <div key={item.id} className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                          <div className="flex items-center justify-between mb-2">
+                            <Badge className="bg-purple-600">{item.action_type}</Badge>
+                            <span className="text-xs text-slate-400">
+                              {new Date(item.created_date).toLocaleDateString('pt-BR')}
+                            </span>
+                          </div>
+                          <p className="text-white text-sm">{item.reason}</p>
+                          <p className="text-green-400 font-bold mt-2">R$ {item.amount?.toFixed(2)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </motion.div>
+      </div>
+    </div>
+  );
+}
