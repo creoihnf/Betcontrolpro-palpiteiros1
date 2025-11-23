@@ -1,0 +1,737 @@
+import React, { useState, useMemo } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { base44 } from '@/api/base44Client';
+import { useNavigate } from 'react-router-dom';
+import { createPageUrl } from '@/utils';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { 
+  Gift, Plus, Calendar, DollarSign, Building2, Wallet, 
+  CheckCircle2, XCircle, AlertTriangle, Filter, Search,
+  TrendingUp, Clock, Eye, Trash2, Target
+} from 'lucide-react';
+import { format, differenceInDays, isPast, parseISO } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+import { toast } from 'sonner';
+import { motion, AnimatePresence } from 'framer-motion';
+import AddFreebetDialog from '@/components/bookmakers/AddFreebetDialog';
+import FreebetResultModal from '@/components/promotions/FreebetResultModal';
+import StatCard from '@/components/dashboard/StatCard';
+import BookmakerSearchSelect from '@/components/bets/BookmakerSearchSelect';
+import GlobalErrorBoundary from '@/components/utils/GlobalErrorBoundary';
+import PromotionUrgencyBadge from '@/components/promotions/PromotionUrgencyBadge';
+
+export default function PromotionsPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [isMobile, setIsMobile] = useState(false);
+  
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [bookmakerFilter, setBookmakerFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('end_date');
+  const [showPromotionModal, setShowPromotionModal] = useState(false);
+  const [showResultModal, setShowResultModal] = useState(false);
+  const [selectedFreebet, setSelectedFreebet] = useState(null);
+
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const checkMobile = () => setIsMobile(window.innerWidth < 768);
+      checkMobile();
+      window.addEventListener('resize', checkMobile);
+      return () => window.removeEventListener('resize', checkMobile);
+    }
+  }, []);
+
+  const { data: promotions = [], isLoading: promotionsLoading } = useQuery({
+    queryKey: ['promotions'],
+    queryFn: () => base44.entities.Promotion.list(),
+  });
+
+  const { data: bookmakers = [] } = useQuery({
+    queryKey: ['bookmakers'],
+    queryFn: () => base44.entities.Bookmaker.list(),
+  });
+
+  const { data: wallets = [] } = useQuery({
+    queryKey: ['wallets'],
+    queryFn: () => base44.entities.Wallet.list(),
+  });
+
+  const { data: profiles = [] } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: () => base44.entities.Profile.list(),
+  });
+
+  const updatePromotionMutation = useMutation({
+    mutationFn: ({ id, data }) => base44.entities.Promotion.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['promotions']);
+      toast.success('Promoção atualizada com sucesso!');
+    },
+    onError: () => {
+      toast.error('Erro ao atualizar promoção');
+    }
+  });
+
+  const deletePromotionMutation = useMutation({
+    mutationFn: (id) => base44.entities.Promotion.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['promotions']);
+      toast.success('Promoção excluída com sucesso!');
+    },
+    onError: () => {
+      toast.error('Erro ao excluir promoção');
+    }
+  });
+
+  const getWalletName = (walletId) => {
+    const wallet = wallets.find(w => w.id === walletId);
+    if (!wallet) return 'Desconhecida';
+    if (wallet.is_main_account) return 'Minha Conta Principal';
+    const profile = profiles.find(p => p.id === wallet.profile_id);
+    return profile ? `Conta de ${profile.name}` : wallet.name;
+  };
+
+  const getBookmakerName = (bookmakerId) => {
+    return bookmakers.find(b => b.id === bookmakerId)?.name || 'Desconhecida';
+  };
+
+  const getPromotionStatus = (promo) => {
+    if (promo.extraction_status === 'pendente') return 'pending';
+    if (promo.extraction_status === 'extraida') return 'used';
+    if (promo.end_date && isPast(parseISO(promo.end_date))) return 'expired';
+    return 'available';
+  };
+
+  // ✅ CORREÇÃO CRÍTICA: Cálculo correto de dias (ignorar horas)
+  const getDaysUntilExpiry = (endDate) => {
+    if (!endDate) return null;
+    
+    // ✅ Zerar horas para comparar apenas DATAS
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const expiryDate = new Date(endDate);
+    expiryDate.setHours(0, 0, 0, 0);
+    
+    // Diferença em milissegundos
+    const diffTime = expiryDate.getTime() - today.getTime();
+    
+    // Converter para dias (arredondar PARA CIMA)
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    console.log('📅 [PROMO DAYS] Cálculo:', {
+      hoje: today.toISOString().split('T')[0],
+      vence: expiryDate.toISOString().split('T')[0],
+      diasRestantes: diffDays,
+      promocao: endDate
+    });
+    
+    return diffDays;
+  };
+
+  const filteredAndSortedPromotions = useMemo(() => {
+    let filtered = promotions.filter(p => p.type === 'freebet' && p.is_active);
+
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(p => getPromotionStatus(p) === statusFilter);
+    }
+
+    if (bookmakerFilter !== 'all') {
+      filtered = filtered.filter(p => p.bookmaker_id === bookmakerFilter);
+    }
+
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(p => 
+        p.title?.toLowerCase().includes(query) ||
+        getBookmakerName(p.bookmaker_id).toLowerCase().includes(query)
+      );
+    }
+
+    filtered.sort((a, b) => {
+      switch (sortBy) {
+        case 'end_date':
+          if (!a.end_date) return 1;
+          if (!b.end_date) return -1;
+          return new Date(a.end_date) - new Date(b.end_date);
+        case 'value':
+          return (b.reward_value || 0) - (a.reward_value || 0);
+        case 'bookmaker':
+          return getBookmakerName(a.bookmaker_id).localeCompare(getBookmakerName(b.bookmaker_id));
+        default:
+          return 0;
+      }
+    });
+
+    return filtered;
+  }, [promotions, statusFilter, bookmakerFilter, searchQuery, sortBy]);
+
+  const { activePromotions, expiringSoon, totalValue, pendingExtractions } = useMemo(() => {
+    const allActivePromotions = promotions.filter(p => p.type === 'freebet' && p.is_active && getPromotionStatus(p) === 'available');
+    const allPendingExtractions = promotions.filter(p => p.type === 'freebet' && p.is_active && p.extraction_status === 'pendente');
+
+    const expiring = allActivePromotions.filter(p => {
+      const days = getDaysUntilExpiry(p.end_date);
+      return days !== null && days <= 3 && days >= 0;
+    });
+
+    const totalAvailableValue = allActivePromotions.reduce((sum, p) => sum + (p.reward_value || 0), 0);
+
+    return {
+      activePromotions: allActivePromotions,
+      expiringSoon: expiring,
+      totalValue: totalAvailableValue,
+      pendingExtractions: allPendingExtractions
+    };
+  }, [promotions]);
+
+  const handleMarkAs = (promoId, status) => {
+    if (status === 'used') {
+      const promo = promotions.find(p => p.id === promoId);
+      if (promo) {
+        setSelectedFreebet({
+          ...promo,
+          bookmaker_name: getBookmakerName(promo.bookmaker_id)
+        });
+        setShowResultModal(true);
+      }
+    } else if (status === 'available') {
+      updatePromotionMutation.mutate({
+        id: promoId,
+        data: { extraction_status: null }
+      });
+    }
+  };
+
+  const handleConfirmResult = (result) => {
+    if (!selectedFreebet) return;
+    updatePromotionMutation.mutate({
+      id: selectedFreebet.id,
+      data: {
+        extraction_status: 'extraida',
+        profit_result: result.profit,
+        extraction_cost: result.cost,
+        net_profit: result.netProfit,
+        extracted_at: new Date().toISOString()
+      }
+    });
+    setShowResultModal(false);
+    setSelectedFreebet(null);
+  };
+
+  const handleExtract = (promotion) => {
+    const primaryWalletId = promotion.wallet_ids && promotion.wallet_ids.length > 0 
+      ? promotion.wallet_ids[0] 
+      : null;
+    
+    const primaryWallet = primaryWalletId ? wallets.find(w => w.id === primaryWalletId) : null;
+
+    localStorage.setItem('extractingFreebet', JSON.stringify({
+      id: promotion.id,
+      title: promotion.title,
+      bookmaker_id: promotion.bookmaker_id,
+      bookmaker_name: getBookmakerName(promotion.bookmaker_id),
+      value: promotion.reward_value || 0,
+      required_stake: promotion.required_stake || 0,
+      end_date: promotion.end_date,
+      wallet_ids: promotion.wallet_ids || [],
+      primary_wallet_id: primaryWalletId,
+      primary_wallet_name: primaryWallet ? (primaryWallet.is_main_account ? 'Minha Conta Principal' : primaryWallet.name) : '',
+      type: 'extraction'
+    }));
+
+    updatePromotionMutation.mutate({
+      id: promotion.id,
+      data: { extraction_status: 'pendente' }
+    });
+
+    navigate(createPageUrl('AddBet') + '?mode=freebet-extraction');
+  };
+
+  const handleDelete = (promoId) => {
+    if (confirm('Tem certeza que deseja excluir esta promoção?')) {
+      deletePromotionMutation.mutate(promoId);
+    }
+  };
+
+  const StatusBadge = ({ status }) => {
+    const config = {
+      available: { color: 'bg-green-600', icon: CheckCircle2, text: 'Disponível' },
+      used: { color: 'bg-blue-600', icon: Eye, text: 'Usada' },
+      expired: { color: 'bg-red-600', icon: XCircle, text: 'Expirada' },
+      pending: { color: 'bg-yellow-600', icon: Clock, text: 'Pendente' }
+    };
+
+    const { color, icon: Icon, text } = config[status];
+
+    return (
+      <Badge className={`${color} flex items-center gap-1`}>
+        <Icon className="w-3 h-3" />
+        {text}
+      </Badge>
+    );
+  };
+
+  const statusOptions = [
+    { value: 'all', label: 'Todos os Status' },
+    { value: 'available', label: 'Disponíveis' },
+    { value: 'pending', label: 'Extração Pendente' },
+    { value: 'used', label: 'Usadas' },
+    { value: 'expired', label: 'Expiradas' }
+  ];
+
+  const sortOptions = [
+    { value: 'end_date', label: 'Data de Validade' },
+    { value: 'value', label: 'Valor' },
+    { value: 'bookmaker', label: 'Casa de Apostas' }
+  ];
+
+  return (
+    <GlobalErrorBoundary>
+      <div style={{ 
+        width: '100%', 
+        maxWidth: '100vw',
+        minHeight: '100vh', 
+        padding: isMobile ? '16px 12px' : '24px 32px', 
+        background: '#0a0a0a',
+        overflowX: 'hidden'
+      }}>
+        <div style={{ maxWidth: '1400px', margin: '0 auto', width: '100%', overflowX: 'hidden' }}>
+          
+          <motion.div 
+            style={{ marginBottom: '32px' }}
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+              <div>
+                <h1 style={{
+                  fontSize: isMobile ? '24px' : '32px',
+                  fontWeight: 900,
+                  letterSpacing: '-1px',
+                  color: '#ffffff',
+                  marginBottom: '8px'
+                }}>
+                  Promoções
+                </h1>
+                <p style={{ color: 'rgba(176, 176, 176, 0.8)', fontSize: isMobile ? '12px' : '14px', fontWeight: 500 }}>
+                  Gerencie freebets, bônus e promoções
+                </p>
+              </div>
+
+              <Button onClick={() => setShowPromotionModal(true)} style={{
+                background: 'linear-gradient(135deg, #8b5cf6, #a78bfa)',
+                color: '#ffffff',
+                fontWeight: 700,
+                padding: isMobile ? '10px 16px' : '12px 20px',
+                borderRadius: '10px',
+                boxShadow: '0 4px 16px rgba(139, 92, 246, 0.4)',
+                fontSize: isMobile ? '13px' : '14px'
+              }}>
+                <Plus className="w-4 h-4 mr-2" />
+                Nova Promoção
+              </Button>
+            </div>
+          </motion.div>
+
+          <motion.div 
+            style={{ 
+              display: 'grid', 
+              gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(250px, 1fr))', 
+              gap: isMobile ? '12px' : '20px', 
+              marginBottom: '24px',
+              width: '100%',
+              maxWidth: '100%',
+              overflowX: 'hidden'
+            }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+          >
+            <StatCard
+              title="Promoções Ativas"
+              value={activePromotions.length.toString()}
+              subtitle={`${expiringSoon.length} expirando em breve`}
+              icon={Gift}
+              type="default"
+            />
+            <StatCard
+              title="Valor Total Disponível"
+              value={`R$ ${totalValue.toFixed(2)}`}
+              icon={DollarSign}
+              type="profit"
+            />
+            <StatCard
+              title="Extrações Pendentes"
+              value={pendingExtractions.length.toString()}
+              icon={Target}
+              type="default"
+            />
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
+          >
+            {/* Filtros Rápidos */}
+            <div className="flex gap-2 mb-4 flex-wrap">
+              <Button
+                variant={statusFilter === 'available' ? 'default' : 'outline'}
+                onClick={() => setStatusFilter('available')}
+                size="sm"
+                className={statusFilter === 'available' ? 'bg-green-600 hover:bg-green-700' : 'border-slate-600 text-slate-300'}
+              >
+                <Gift className="w-4 h-4 mr-2" />
+                Disponíveis
+              </Button>
+              <Button
+                variant={statusFilter === 'pending' ? 'default' : 'outline'}
+                onClick={() => setStatusFilter('pending')}
+                size="sm"
+                className={statusFilter === 'pending' ? 'bg-yellow-600 hover:bg-yellow-700' : 'border-slate-600 text-slate-300'}
+              >
+                <Clock className="w-4 h-4 mr-2" />
+                Pendentes
+              </Button>
+              <Button
+                variant={statusFilter === 'all' ? 'default' : 'outline'}
+                onClick={() => setStatusFilter('all')}
+                size="sm"
+                className={statusFilter === 'all' ? 'bg-blue-600 hover:bg-blue-700' : 'border-slate-600 text-slate-300'}
+              >
+                Todas
+              </Button>
+            </div>
+
+            <Card className="border-slate-700 mb-6" style={{
+              background: 'rgba(20, 20, 20, 0.6)',
+              maxWidth: '100%',
+              overflowX: 'hidden'
+            }}>
+              <CardContent className="p-6" style={{ padding: isMobile ? '16px' : '24px', maxWidth: '100%', overflowX: 'hidden' }}>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4" style={{ maxWidth: '100%' }}>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <Input
+                      placeholder="Buscar promoção..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10 bg-slate-900 border-slate-700 text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="relative">
+                      <select
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        className="w-full h-10 px-3 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm appearance-none pr-10"
+                        style={{ 
+                          cursor: 'pointer',
+                          backgroundImage: 'none'
+                        }}
+                      >
+                        {statusOptions.map(opt => (
+                          <option key={opt.value} value={opt.value} style={{ background: '#0f172a' }}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                      <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <BookmakerSearchSelect
+                      value={bookmakerFilter}
+                      onValueChange={setBookmakerFilter}
+                      bookmakers={[{ id: 'all', name: 'Todas as Casas' }, ...bookmakers]}
+                      placeholder="Todas as Casas"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="relative">
+                      <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        className="w-full h-10 px-3 bg-slate-900 border border-slate-700 rounded-lg text-white text-sm appearance-none pr-10"
+                        style={{ 
+                          cursor: 'pointer',
+                          backgroundImage: 'none'
+                        }}
+                      >
+                        {sortOptions.map(opt => (
+                          <option key={opt.value} value={opt.value} style={{ background: '#0f172a' }}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                      <TrendingUp className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="space-y-4" style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+              <AnimatePresence mode="popLayout">
+                {filteredAndSortedPromotions.length === 0 ? (
+                  <Card className="border-slate-700" style={{ background: 'rgba(20, 20, 20, 0.6)' }}>
+                    <CardContent className="p-12 text-center">
+                      <Gift className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+                      <p className="text-slate-400 text-lg mb-2">Nenhuma promoção encontrada</p>
+                      <p className="text-slate-500 text-sm">
+                        {searchQuery || statusFilter !== 'all' || bookmakerFilter !== 'all' 
+                          ? 'Tente ajustar os filtros'
+                          : 'Adicione sua primeira promoção para começar'}
+                      </p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  filteredAndSortedPromotions.map((promo) => {
+                    const status = getPromotionStatus(promo);
+                    const daysLeft = getDaysUntilExpiry(promo.end_date);
+                    const walletNames = (promo.wallet_ids || []).map(wId => getWalletName(wId));
+                    const primaryWalletName = walletNames[0] || 'Sem conta';
+
+                    // ✅ URGÊNCIA VISUAL DO CARD
+                    let cardBorderColor = 'border-slate-700';
+                    let cardBgColor = 'rgba(20, 20, 20, 0.6)';
+                    let cardRing = '';
+                    
+                    if (daysLeft !== null && status !== 'used' && status !== 'expired') {
+                      if (daysLeft < 0) {
+                        cardBorderColor = 'border-red-900';
+                        cardBgColor = 'rgba(127, 29, 29, 0.2)';
+                      } else if (daysLeft === 0) {
+                        cardBorderColor = 'border-red-600';
+                        cardBgColor = 'rgba(220, 38, 38, 0.15)';
+                        cardRing = 'ring-2 ring-red-500/50 animate-pulse';
+                      } else if (daysLeft <= 2) {
+                        cardBorderColor = 'border-orange-600';
+                        cardBgColor = 'rgba(234, 88, 12, 0.15)';
+                        cardRing = 'ring-2 ring-orange-500/40';
+                      } else if (daysLeft <= 7) {
+                        cardBorderColor = 'border-yellow-600';
+                        cardBgColor = 'rgba(202, 138, 4, 0.12)';
+                      }
+                    }
+
+                    return (
+                      <motion.div
+                        key={promo.id}
+                        layout
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        transition={{ duration: 0.2 }}
+                        style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}
+                      >
+                        <Card className={`${cardBorderColor} ${cardRing} border-2 transition-all`} style={{
+                          background: cardBgColor,
+                          maxWidth: '100%',
+                          overflowX: 'hidden'
+                        }}>
+                          <CardContent className="p-6" style={{ padding: isMobile ? '16px' : '24px', maxWidth: '100%', overflowX: 'hidden' }}>
+                            <div className="flex flex-col lg:flex-row gap-6">
+                              
+                              <div className="flex-1 space-y-4" style={{ minWidth: 0 }}>
+                                <div className="flex items-start justify-between gap-4">
+                                  <div style={{ minWidth: 0, flex: 1 }}>
+                                    <h3 className="text-xl font-bold text-white mb-2" style={{ 
+                                      fontSize: isMobile ? '16px' : '20px',
+                                      wordBreak: 'break-word'
+                                    }}>
+                                      {promo.title}
+                                    </h3>
+                                    <div className="flex flex-wrap gap-2">
+                                      <StatusBadge status={status} />
+                                      {/* ✅ NOVO: Badge com urgência visual correta */}
+                                      {status !== 'expired' && status !== 'used' && (
+                                        <PromotionUrgencyBadge daysRemaining={daysLeft} />
+                                      )}
+                                      {/* ✅ Badge de Origem */}
+                                      {promo.origem_tipo === 'automatica' && (
+                                        <Badge className="bg-cyan-600/20 text-cyan-300 border-cyan-600/50 text-xs">
+                                          <Zap className="w-3 h-3 mr-1" />
+                                          Auto-gerada
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                  <div className="flex items-center gap-3 text-slate-300">
+                                    <div className="w-10 h-10 rounded-full bg-purple-600/20 flex items-center justify-center flex-shrink-0">
+                                      <Wallet className="w-5 h-5 text-purple-400" />
+                                    </div>
+                                    <div style={{ minWidth: 0 }}>
+                                      <p className="text-xs text-slate-500">Conta</p>
+                                      <p className="font-semibold" style={{ wordBreak: 'break-word' }}>{primaryWalletName}</p>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-3 text-slate-300">
+                                    <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center flex-shrink-0">
+                                      <Building2 className="w-5 h-5 text-blue-400" />
+                                    </div>
+                                    <div style={{ minWidth: 0 }}>
+                                      <p className="text-xs text-slate-500">Casa</p>
+                                      <p className="font-semibold" style={{ wordBreak: 'break-word' }}>{getBookmakerName(promo.bookmaker_id)}</p>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-3 text-slate-300">
+                                    <div className="w-10 h-10 rounded-full bg-green-600/20 flex items-center justify-center flex-shrink-0">
+                                      <DollarSign className="w-5 h-5 text-green-400" />
+                                    </div>
+                                    <div>
+                                      <p className="text-xs text-slate-500">Valor</p>
+                                      <p className="font-semibold text-green-400">R$ {(promo.reward_value || 0).toFixed(2)}</p>
+                                    </div>
+                                  </div>
+
+                                  {promo.end_date && (
+                                    <div className="flex items-center gap-3 text-slate-300">
+                                      <div className="w-10 h-10 rounded-full bg-orange-600/20 flex items-center justify-center flex-shrink-0">
+                                        <Calendar className="w-5 h-5 text-orange-400" />
+                                      </div>
+                                      <div>
+                                        <p className="text-xs text-slate-500">Validade</p>
+                                        <p className="font-semibold">
+                                          {format(parseISO(promo.end_date), "dd/MM/yyyy", { locale: ptBR })}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {walletNames.length > 1 && (
+                                  <div className="p-3 bg-blue-900/20 border border-blue-700/50 rounded-lg">
+                                    <p className="text-blue-300 text-xs mb-2">
+                                      <strong>Contas Vinculadas:</strong>
+                                    </p>
+                                    <div className="flex flex-wrap gap-2">
+                                      {walletNames.map((name, idx) => (
+                                        <Badge key={idx} variant="outline" className="text-xs border-blue-600 text-blue-300 bg-blue-900/20">
+                                          {name}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* ✅ Link para aposta de origem */}
+                                {promo.origem_aposta_id && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => navigate(createPageUrl('Bets') + `?highlight=${promo.origem_aposta_id}`)}
+                                    className="text-cyan-400 hover:text-cyan-300 text-xs hover:bg-cyan-900/20"
+                                  >
+                                    <Zap className="w-3 h-3 mr-1" />
+                                    Ver aposta origem →
+                                  </Button>
+                                )}
+                              </div>
+
+                              <div className="flex lg:flex-col gap-2">
+                                {(status === 'available' || status === 'pending') && (
+                                  <>
+                                    <Button
+                                      onClick={() => handleExtract(promo)}
+                                      className="flex-1 lg:flex-initial"
+                                      style={{
+                                        background: daysLeft === 0 
+                                          ? 'linear-gradient(135deg, #dc2626, #991b1b)' 
+                                          : daysLeft <= 2
+                                          ? 'linear-gradient(135deg, #ea580c, #c2410c)'
+                                          : 'linear-gradient(135deg, #10b981, #059669)',
+                                        color: '#ffffff',
+                                        fontWeight: 600
+                                      }}
+                                    >
+                                      <Gift className="w-4 h-4 mr-2" />
+                                      {daysLeft === 0 ? 'EXTRAIR AGORA' : 'Extrair'}
+                                    </Button>
+                                    {status !== 'pending' && (
+                                      <Button
+                                        onClick={() => handleMarkAs(promo.id, 'used')}
+                                        variant="outline"
+                                        className="flex-1 lg:flex-initial border-blue-700 text-blue-300 hover:bg-blue-900/20"
+                                      >
+                                        <Eye className="w-4 h-4 mr-2" />
+                                        Marcar Usada
+                                      </Button>
+                                    )}
+                                  </>
+                                )}
+
+                                {status === 'used' && (
+                                  <Button
+                                    onClick={() => handleMarkAs(promo.id, 'available')}
+                                    variant="outline"
+                                    className="flex-1 lg:flex-initial border-green-700 text-green-300 hover:bg-green-900/20"
+                                  >
+                                    <CheckCircle2 className="w-4 h-4 mr-2" />
+                                    Marcar Disponível
+                                  </Button>
+                                )}
+
+                                <Button
+                                  onClick={() => handleDelete(promo.id)}
+                                  variant="outline"
+                                  className="border-red-700 text-red-300 hover:bg-red-900/20"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </motion.div>
+                    );
+                  })
+                )}
+              </AnimatePresence>
+            </div>
+          </motion.div>
+        </div>
+
+        {showResultModal && selectedFreebet && (
+          <FreebetResultModal
+            freebet={selectedFreebet}
+            onClose={() => {
+              setShowResultModal(false);
+              setSelectedFreebet(null);
+            }}
+            onConfirm={handleConfirmResult}
+          />
+        )}
+
+        {showPromotionModal && (
+          <AddFreebetDialog
+            isOpen={showPromotionModal}
+            onClose={() => setShowPromotionModal(false)}
+            bookmakers={bookmakers}
+            wallet={wallets[0]}
+            wallets={wallets}
+            profiles={profiles}
+            onSuccess={() => {
+              queryClient.invalidateQueries(['promotions']);
+              setShowPromotionModal(false);
+            }}
+          />
+        )}
+      </div>
+    </GlobalErrorBoundary>
+  );
+}
