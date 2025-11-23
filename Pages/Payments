@@ -1,0 +1,1140 @@
+import React, { useState, useEffect, useMemo } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  DollarSign,
+  Users,
+  TrendingUp,
+  AlertCircle,
+  PlusCircle,
+  Edit,
+  Trash2,
+  CalendarDays,
+  CheckCircle,
+  Percent,
+  Wallet,
+  ArrowRight,
+  RefreshCw,
+  Save
+} from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationPrevious,
+  PaginationLink,
+  PaginationNext,
+} from "@/components/ui/pagination";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { format, isThisMonth } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+import { toast } from 'sonner';
+import { AnimatePresence, motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
+import StatCard from "../components/dashboard/StatCard";
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * PÁGINA DE PAGAMENTOS - CÁLCULO AUTOMÁTICO DE SHARE DE LUCRO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Funcionalidades:
+ * - Cálculo automático baseado em % do lucro líquido
+ * - Campo editável de porcentagem com recálculo instantâneo
+ * - Layout responsivo (cards empilhados em mobile)
+ * - Registro de pagamento que debita o lucro
+ */
+
+// Opções de porcentagem disponíveis
+const PERCENTAGE_OPTIONS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
+
+export default function PaymentsPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [currentUser, setCurrentUser] = useState(null);
+  const [activeTab, setActiveTab] = useState("profiles");
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  // Estados para modais
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [editingPayment, setEditingPayment] = useState(null);
+  const [paymentTarget, setPaymentTarget] = useState(null);
+
+  // Estado para porcentagens editáveis localmente (override temporário)
+  const [localPercentages, setLocalPercentages] = useState({});
+
+  // Detectar mobile
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // QUERIES
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const { data: payments = [], isLoading: loadingPayments } = useQuery({
+    queryKey: ['payments', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.Payment.filter({ created_by: currentUser.email }, "-payment_date");
+    },
+    enabled: !!currentUser,
+    retry: 1,
+    staleTime: 30000,
+  });
+
+  const { data: profiles = [], isLoading: loadingProfiles } = useQuery({
+    queryKey: ['profiles', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      const data = await base44.entities.Profile.filter({ created_by: currentUser.email });
+      return data.filter(p => p.is_active && p.name && p.name.trim().length > 0);
+    },
+    enabled: !!currentUser,
+    retry: 1,
+    staleTime: 30000,
+  });
+
+  const { data: wallets = [], isLoading: loadingWallets } = useQuery({
+    queryKey: ['wallets', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.Wallet.filter({ created_by: currentUser.email });
+    },
+    enabled: !!currentUser,
+    retry: 1,
+    staleTime: 30000,
+  });
+
+  const { data: bets = [], isLoading: loadingBets } = useQuery({
+    queryKey: ['bets', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.Bet.filter({ created_by: currentUser.email });
+    },
+    enabled: !!currentUser,
+    retry: 1,
+    staleTime: 30000,
+  });
+
+  const { data: profitRecords = [], isLoading: loadingProfitRecords } = useQuery({
+    queryKey: ['payment-profit-records', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.ProfitRecord.filter({ created_by: currentUser.email });
+    },
+    enabled: !!currentUser,
+    retry: 1,
+    staleTime: 30000,
+  });
+
+  useEffect(() => {
+    loadUser();
+  }, []);
+
+  const loadUser = async () => {
+    try {
+      const user = await base44.auth.me();
+      setCurrentUser(user);
+    } catch (error) {
+      console.error('Erro ao carregar usuário:', error);
+      toast.error('Erro ao carregar dados do usuário');
+    }
+  };
+
+  const isLoading = loadingPayments || loadingProfiles || loadingWallets || loadingBets || loadingProfitRecords;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FILTRAR CONTAS DE TERCEIROS (com configuração de pagamento)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const profilesAsPartners = useMemo(() => {
+    return profiles.filter(profile => {
+      // Contas de terceiro são aquelas com payment_type configurado
+      const hasPaymentConfig = profile.payment_type === 'percentage' && profile.percentage > 0 ||
+                              profile.payment_type === 'fixed' && profile.fixed_amount > 0;
+      return profile.is_active && hasPaymentConfig;
+    });
+  }, [profiles]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CÁLCULO AUTOMÁTICO DE PAGAMENTOS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const calculateAutomaticPayments = useMemo(() => {
+    return profilesAsPartners.map(profile => {
+      // Obter porcentagem (local override ou do profile)
+      const effectivePercentage = localPercentages[profile.id] !== undefined
+        ? localPercentages[profile.id]
+        : (profile.percentage || 0);
+
+      // 1. LUCROS DAS APOSTAS
+      const profileBets = bets.filter(bet => bet.profile_id === profile.id);
+
+      const betProfit = profileBets
+        .filter(bet => ['green', 'bateu_protecao', 'cashout', 'duplo_green', 'triplo_green', 'meio_duplo'].includes(bet.status))
+        .reduce((sum, bet) => sum + (bet.profit_loss || 0), 0);
+
+      // 2. STAKE TOTAL (para cálculo de ROI)
+      const totalStake = profileBets
+        .filter(bet => ['green', 'perda', 'bateu_protecao', 'cashout'].includes(bet.status))
+        .reduce((sum, bet) => {
+          const mainStake = bet.is_freebet ? 0 : (bet.stake || 0);
+          const protectionStake = (bet.protection_bookmakers || []).reduce((s, p) => s + (parseFloat(p.stake) || 0), 0);
+          const additionalStake = (bet.additional_bets || []).reduce((s, a) => s + (parseFloat(a.stake) || 0), 0);
+          return sum + mainStake + protectionStake + additionalStake + (bet.procedure_loss || 0);
+        }, 0);
+
+      // 3. LUCROS RÁPIDOS (ProfitRecords) - BUSCAR POR WALLET DO PERFIL
+      const profileWallets = wallets.filter(w => w.profile_id === profile.id);
+      const profileWalletIds = profileWallets.map(w => w.id);
+
+      const quickProfit = profitRecords
+        .filter(record => profileWalletIds.includes(record.wallet_id))
+        .reduce((sum, record) => sum + (record.amount || 0), 0);
+
+      // 4. LUCRO TOTAL = APOSTAS + LUCROS RÁPIDOS
+      const totalProfit = betProfit + quickProfit;
+
+      // 5. ROI = APENAS LUCRO DE APOSTAS / STAKE
+      const roi = totalStake > 0 ? (betProfit / totalStake) * 100 : 0;
+
+      // 6. PAGAMENTOS JÁ REALIZADOS para este perfil
+      const paidAmount = payments
+        .filter(p => p.profile_id === profile.id && p.status === 'paid')
+        .reduce((sum, p) => sum + (p.amount || 0), 0);
+
+      // 7. LUCRO LÍQUIDO DISPONÍVEL (após pagamentos)
+      const availableProfit = Math.max(0, totalProfit - paidAmount);
+
+      // 8. CALCULAR VALOR DEVIDO (apenas sobre lucro positivo disponível)
+      let amountToPay = 0;
+
+      if (profile.payment_type === 'percentage' && availableProfit > 0) {
+        amountToPay = availableProfit * (effectivePercentage / 100);
+      } else if (profile.payment_type === 'fixed') {
+        amountToPay = profile.fixed_amount || 0;
+      }
+
+      return {
+        profile_id: profile.id,
+        profile_name: profile.name,
+        profile_color: profile.color,
+        total_profit: totalProfit,
+        bet_profit: betProfit,
+        quick_profit: quickProfit,
+        total_stake: totalStake,
+        roi: roi,
+        paid_amount: paidAmount,
+        available_profit: availableProfit,
+        payment_type: profile.payment_type,
+        percentage: effectivePercentage,
+        original_percentage: profile.percentage || 0,
+        fixed_amount: profile.fixed_amount || 0,
+        amount_to_pay: amountToPay,
+        total_operations: profileBets.length,
+        quick_profits_count: profitRecords.filter(r => profileWalletIds.includes(r.wallet_id)).length,
+        green_operations: profileBets.filter(b => ['green', 'bateu_protecao', 'cashout'].includes(b.status)).length,
+        red_operations: profileBets.filter(b => b.status === 'perda').length
+      };
+    });
+  }, [profilesAsPartners, bets, wallets, profitRecords, payments, localPercentages]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HANDLERS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const handlePercentageChange = (profileId, newPercentage) => {
+    setLocalPercentages(prev => ({
+      ...prev,
+      [profileId]: parseInt(newPercentage)
+    }));
+  };
+
+  const formatCurrency = (value) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL'
+    }).format(value || 0);
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return '-';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return '-';
+      return format(date, 'dd/MM/yyyy', { locale: ptBR });
+    } catch (error) {
+      return '-';
+    }
+  };
+
+  // Estatísticas
+  const totalPending = calculateAutomaticPayments.reduce((sum, calc) => sum + calc.amount_to_pay, 0);
+
+  const totalPaidThisMonth = payments.filter(payment =>
+    payment.status === 'paid' && payment.payment_date && isThisMonth(new Date(payment.payment_date))
+  ).reduce((sum, payment) => sum + (payment.amount || 0), 0);
+
+  // Paginação
+  const totalPages = Math.ceil(payments.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const paginatedPayments = payments.slice(startIndex, startIndex + itemsPerPage);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MUTATIONS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const createPaymentMutation = useMutation({
+    mutationFn: async (paymentData) => {
+      return await base44.entities.Payment.create({
+        ...paymentData,
+        created_by: currentUser.email
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['payments'] });
+      toast.success('Pagamento registrado com sucesso!');
+      setIsPaymentModalOpen(false);
+      setPaymentTarget(null);
+    },
+    onError: (error) => {
+      console.error('Erro ao registrar pagamento:', error);
+      toast.error('Erro ao registrar pagamento');
+    }
+  });
+
+  const updatePaymentMutation = useMutation({
+    mutationFn: async ({ id, data }) => {
+      return await base44.entities.Payment.update(id, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['payments'] });
+      toast.success('Pagamento atualizado!');
+      setIsPaymentModalOpen(false);
+      setEditingPayment(null);
+    },
+    onError: (error) => {
+      console.error('Erro ao atualizar pagamento:', error);
+      toast.error('Erro ao atualizar pagamento');
+    }
+  });
+
+  const deletePaymentMutation = useMutation({
+    mutationFn: async (id) => {
+      await base44.entities.Payment.delete(id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['payments'] });
+      toast.success('Pagamento excluído!');
+    },
+    onError: (error) => {
+      const is404 = error.response?.status === 404 || error.message?.includes('not found');
+      if (is404) {
+        queryClient.invalidateQueries({ queryKey: ['payments'] });
+        toast.success('Pagamento já estava excluído.');
+      } else {
+        toast.error('Erro ao excluir pagamento.');
+      }
+    }
+  });
+
+  // Salvar porcentagem no profile
+  const updateProfilePercentageMutation = useMutation({
+    mutationFn: async ({ profileId, percentage }) => {
+      return await base44.entities.Profile.update(profileId, {
+        percentage: percentage
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      toast.success('Porcentagem salva!');
+    },
+    onError: () => {
+      toast.error('Erro ao salvar porcentagem');
+    }
+  });
+
+  const handleRegisterPayment = (calc) => {
+    setPaymentTarget(calc);
+    setEditingPayment(null);
+    setIsPaymentModalOpen(true);
+  };
+
+  const handleSavePayment = (amount, notes) => {
+    if (editingPayment) {
+      updatePaymentMutation.mutate({
+        id: editingPayment.id,
+        data: { amount, notes, status: 'paid', payment_date: new Date().toISOString() }
+      });
+    } else if (paymentTarget) {
+      createPaymentMutation.mutate({
+        profile_id: paymentTarget.profile_id,
+        amount: amount,
+        payment_date: new Date().toISOString(),
+        status: 'paid',
+        notes: notes || `Pagamento de ${paymentTarget.percentage}% do lucro`
+      });
+    }
+  };
+
+  const handleSavePercentage = (profileId) => {
+    const newPercentage = localPercentages[profileId];
+    if (newPercentage !== undefined) {
+      updateProfilePercentageMutation.mutate({ profileId, percentage: newPercentage });
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LOADING STATE
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  if (isLoading) {
+    return (
+      <div style={{ width: '100%', minHeight: '100vh', padding: '24px 32px', background: '#0a0a0a' }}>
+        <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+          <Skeleton className="h-12 w-64 bg-slate-800" />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+            {[...Array(3)].map((_, i) => (
+              <Skeleton key={i} className="h-32 bg-slate-800 rounded-xl" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER - CARD DE CONTA (RESPONSIVO)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const renderPartnerCard = (calc, index) => {
+    const hasPercentageChanged = localPercentages[calc.profile_id] !== undefined &&
+                                  localPercentages[calc.profile_id] !== calc.original_percentage;
+
+    return (
+      <motion.div
+        key={calc.profile_id}
+        layout
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: index * 0.05 }}
+      >
+        <Card className="border-slate-700 bg-slate-800/50 hover:border-green-600/50 transition-all">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {calc.profile_color && (
+                  <div
+                    className="w-4 h-4 rounded-full"
+                    style={{ backgroundColor: calc.profile_color }}
+                  />
+                )}
+                <CardTitle className="text-lg text-white">
+                  {calc.profile_name}
+                </CardTitle>
+              </div>
+              <Badge className="bg-slate-700 text-slate-300">
+                {calc.total_operations} operações
+              </Badge>
+            </div>
+          </CardHeader>
+
+          <CardContent className="space-y-4">
+            {/* Lucro Líquido Acumulado */}
+            <div className="p-4 rounded-lg" style={{
+              background: 'linear-gradient(135deg, rgba(30, 30, 30, 0.8), rgba(40, 40, 40, 0.6))',
+              border: '1px solid rgba(51, 51, 51, 0.5)'
+            }}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-slate-400 uppercase font-semibold">
+                  Lucro Líquido Disponível
+                </span>
+                <TrendingUp className="w-4 h-4 text-green-400" />
+              </div>
+              <p className={`text-2xl font-bold ${calc.available_profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {formatCurrency(calc.available_profit)}
+              </p>
+              {calc.paid_amount > 0 && (
+                <p className="text-xs text-slate-500 mt-1">
+                  Total: {formatCurrency(calc.total_profit)} | Já pago: {formatCurrency(calc.paid_amount)}
+                </p>
+              )}
+              {(calc.bet_profit > 0 || calc.quick_profit > 0) && (
+                <div className="flex gap-3 mt-2 text-xs">
+                  {calc.bet_profit !== 0 && (
+                    <span className="text-slate-400">
+                      Apostas: {formatCurrency(calc.bet_profit)}
+                    </span>
+                  )}
+                  {calc.quick_profit > 0 && (
+                    <span className="text-emerald-400">
+                      Lucro Rápido: {formatCurrency(calc.quick_profit)}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Campo Editável de Porcentagem */}
+            <div className="p-4 rounded-lg" style={{
+              background: 'rgba(45, 80, 22, 0.15)',
+              border: '1px solid rgba(45, 80, 22, 0.3)'
+            }}>
+              <div className="flex items-center justify-between mb-3">
+                <Label className="text-sm text-slate-300 flex items-center gap-2">
+                  <Percent className="w-4 h-4 text-green-400" />
+                  Porcentagem de Share
+                </Label>
+                {hasPercentageChanged && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleSavePercentage(calc.profile_id)}
+                    className="h-7 px-2 text-green-400 hover:text-green-300 hover:bg-green-900/20"
+                  >
+                    <Save className="w-3 h-3 mr-1" />
+                    Salvar
+                  </Button>
+                )}
+              </div>
+
+              <Select
+                value={calc.percentage.toString()}
+                onValueChange={(value) => handlePercentageChange(calc.profile_id, value)}
+              >
+                <SelectTrigger className="bg-slate-900 border-slate-600 text-white h-12 text-lg font-bold">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-900 border-slate-700">
+                  {PERCENTAGE_OPTIONS.map(pct => (
+                    <SelectItem key={pct} value={pct.toString()} className="text-white hover:bg-slate-800">
+                      {pct}%
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Valor de Pagamento Devido */}
+            <div className="p-4 rounded-lg" style={{
+              background: 'linear-gradient(135deg, rgba(45, 80, 22, 0.3), rgba(212, 175, 55, 0.15))',
+              border: '2px solid rgba(212, 175, 55, 0.4)'
+            }}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs uppercase font-semibold" style={{ color: '#d4af37' }}>
+                  Valor a Pagar
+                </span>
+                <DollarSign className="w-5 h-5" style={{ color: '#d4af37' }} />
+              </div>
+              <p className="text-3xl font-black text-green-400">
+                {formatCurrency(calc.amount_to_pay)}
+              </p>
+              <p className="text-xs mt-1" style={{ color: 'rgba(212, 175, 55, 0.7)' }}>
+                {calc.percentage}% de {formatCurrency(calc.available_profit)}
+              </p>
+            </div>
+
+            {/* ROI e Ações */}
+            <div className="flex items-center justify-between pt-2">
+              <div className="flex items-center gap-4">
+                <div>
+                  <span className="text-xs text-slate-500 block">ROI</span>
+                  <span className={`font-bold ${calc.roi > 0 ? 'text-green-400' : calc.roi < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                    {calc.roi.toFixed(2)}%
+                  </span>
+                </div>
+                <div>
+                  <span className="text-xs text-slate-500 block">Stake</span>
+                  <span className="text-white font-medium text-sm">
+                    {formatCurrency(calc.total_stake)}
+                  </span>
+                </div>
+              </div>
+
+              <Button
+                onClick={() => handleRegisterPayment(calc)}
+                disabled={calc.amount_to_pay <= 0}
+                className="bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 text-white font-bold"
+              >
+                <DollarSign className="w-4 h-4 mr-2" />
+                Pagar
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+    );
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER - HISTÓRICO MOBILE (CARDS)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const renderPaymentCardMobile = (payment) => {
+    const relatedProfile = profiles.find(p => p.id === payment.profile_id);
+
+    return (
+      <motion.div
+        key={payment.id}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+      >
+        <Card className="bg-slate-800/50 border-slate-700 mb-3">
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between mb-3">
+              <div className="flex items-center gap-2">
+                {relatedProfile?.color && (
+                  <div
+                    className="w-3 h-3 rounded-full"
+                    style={{ backgroundColor: relatedProfile.color }}
+                  />
+                )}
+                <span className="font-medium text-white">
+                  {relatedProfile?.name || 'Desconhecido'}
+                </span>
+              </div>
+              <Badge className={
+                payment.status === 'paid' ? 'bg-green-500/20 text-green-300' :
+                payment.status === 'pending' ? 'bg-yellow-500/20 text-yellow-300' :
+                'bg-red-500/20 text-red-300'
+              }>
+                {payment.status === 'paid' ? 'Pago' : payment.status === 'pending' ? 'Pendente' : 'Cancelado'}
+              </Badge>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold text-green-400">
+                  {formatCurrency(payment.amount)}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {formatDate(payment.payment_date)}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    setEditingPayment(payment);
+                    setPaymentTarget(null);
+                    setIsPaymentModalOpen(true);
+                  }}
+                  className="text-blue-400 hover:bg-blue-900/20"
+                >
+                  <Edit className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => deletePaymentMutation.mutate(payment.id)}
+                  className="text-red-400 hover:bg-red-900/20"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+    );
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER PRINCIPAL
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  return (
+    <div style={{
+      width: '100%',
+      maxWidth: '100vw',
+      minHeight: '100vh',
+      padding: isMobile ? '16px 12px' : '24px 32px',
+      background: '#0a0a0a',
+      overflowX: 'hidden'
+    }}>
+      <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+
+        {/* Header */}
+        <motion.div
+          style={{ marginBottom: isMobile ? '20px' : '32px' }}
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px'
+          }}>
+            <div>
+              <h1 style={{
+                fontSize: isMobile ? '24px' : '32px',
+                fontWeight: 900,
+                color: '#ffffff',
+                marginBottom: '4px'
+              }}>
+                Pagamentos
+              </h1>
+              <p style={{ color: 'rgba(176, 176, 176, 0.8)', fontSize: isMobile ? '12px' : '14px' }}>
+                Gerencie shares e pagamentos de parceiros
+              </p>
+            </div>
+
+            <Button
+              onClick={() => {
+                setEditingPayment(null);
+                setPaymentTarget(null);
+                setIsPaymentModalOpen(true);
+              }}
+              className="bg-gradient-to-r from-green-600 to-green-500"
+              size={isMobile ? "sm" : "default"}
+            >
+              <DollarSign className="w-4 h-4 mr-2" />
+              {isMobile ? 'Novo' : 'Novo Pagamento'}
+            </Button>
+          </div>
+        </motion.div>
+
+        {/* Stats Cards */}
+        <motion.div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: isMobile ? '12px' : '20px',
+            marginBottom: '24px'
+          }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+        >
+          <StatCard
+            title="Total Pendente"
+            value={formatCurrency(totalPending)}
+            subtitle={`${calculateAutomaticPayments.length} conta${calculateAutomaticPayments.length !== 1 ? 's' : ''}`}
+            icon={AlertCircle}
+            type="default"
+          />
+          <StatCard
+            title="Pago este Mês"
+            value={formatCurrency(totalPaidThisMonth)}
+            icon={CheckCircle}
+            type="profit"
+          />
+          <StatCard
+            title="Parceiros Ativos"
+            value={profilesAsPartners.length.toString()}
+            icon={Users}
+            type="default"
+          />
+        </motion.div>
+
+        {/* Tabs */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <TabsList className="grid w-full grid-cols-2 p-1" style={{
+              background: 'rgba(30, 30, 30, 0.6)',
+              border: '1px solid rgba(51, 51, 51, 0.5)'
+            }}>
+              <TabsTrigger value="profiles" className="data-[state=active]:bg-green-600/20">
+                <Users className="w-4 h-4 mr-2" />
+                Contas ({profilesAsPartners.length})
+              </TabsTrigger>
+              <TabsTrigger value="payments" className="data-[state=active]:bg-green-600/20">
+                <DollarSign className="w-4 h-4 mr-2" />
+                Histórico ({payments.length})
+              </TabsTrigger>
+            </TabsList>
+
+            {/* Tab: Contas de Repasse */}
+            <TabsContent value="profiles" className="mt-6">
+              {profilesAsPartners.length === 0 ? (
+                <Card className="bg-slate-800/50 border-slate-700">
+                  <CardContent className="py-12 text-center">
+                    <Users className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                    <h3 className="text-xl font-bold text-white mb-2">
+                      Nenhuma conta de repasse configurada
+                    </h3>
+                    <p className="text-slate-400 mb-6">
+                      Configure porcentagens de repasse nas Contas de Terceiros.
+                    </p>
+                    <Button
+                      onClick={() => navigate('/Wallets')}
+                      className="bg-gradient-to-r from-purple-600 to-purple-500"
+                    >
+                      <PlusCircle className="w-4 h-4 mr-2" />
+                      Ir para Contas
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className={`grid gap-6 ${isMobile ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-2'}`}>
+                  {calculateAutomaticPayments.map((calc, index) => renderPartnerCard(calc, index))}
+                </div>
+              )}
+            </TabsContent>
+
+            {/* Tab: Histórico */}
+            <TabsContent value="payments" className="mt-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-bold text-white">Histórico de Pagamentos</h2>
+                <Button
+                  onClick={() => {
+                    setEditingPayment(null);
+                    setPaymentTarget(null);
+                    setIsPaymentModalOpen(true);
+                  }}
+                  size="sm"
+                  className="bg-blue-600 hover:bg-blue-700"
+                >
+                  <PlusCircle className="w-4 h-4 mr-1" />
+                  Registrar
+                </Button>
+              </div>
+
+              {payments.length === 0 ? (
+                <Card className="bg-slate-800/50 border-slate-700">
+                  <CardContent className="py-12 text-center">
+                    <CalendarDays className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                    <h3 className="text-xl font-bold text-white mb-2">
+                      Nenhum pagamento registrado
+                    </h3>
+                    <p className="text-slate-400">
+                      Comece a registrar pagamentos para construir seu histórico.
+                    </p>
+                  </CardContent>
+                </Card>
+              ) : isMobile ? (
+                // Mobile: Cards empilhados
+                <div className="space-y-3">
+                  {paginatedPayments.map(payment => renderPaymentCardMobile(payment))}
+                </div>
+              ) : (
+                // Desktop: Tabela
+                <div className="bg-slate-800/50 rounded-xl border border-slate-700 overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-slate-700/50 border-slate-600">
+                        <TableHead className="text-slate-300">Perfil</TableHead>
+                        <TableHead className="text-slate-300">Valor</TableHead>
+                        <TableHead className="text-slate-300">Data</TableHead>
+                        <TableHead className="text-slate-300">Status</TableHead>
+                        <TableHead className="text-slate-300 text-right">Ações</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {paginatedPayments.map((payment) => {
+                        const relatedProfile = profiles.find(p => p.id === payment.profile_id);
+
+                        return (
+                          <TableRow key={payment.id} className="border-slate-700 hover:bg-slate-700/30">
+                            <TableCell className="text-white">
+                              <div className="flex items-center gap-2">
+                                {relatedProfile?.color && (
+                                  <div
+                                    className="w-2 h-2 rounded-full"
+                                    style={{ backgroundColor: relatedProfile.color }}
+                                  />
+                                )}
+                                {relatedProfile?.name || 'Desconhecido'}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-green-400 font-bold">
+                              {formatCurrency(payment.amount)}
+                            </TableCell>
+                            <TableCell className="text-slate-300">
+                              {formatDate(payment.payment_date)}
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={
+                                payment.status === 'paid' ? 'bg-green-500/20 text-green-300' :
+                                payment.status === 'pending' ? 'bg-yellow-500/20 text-yellow-300' :
+                                'bg-red-500/20 text-red-300'
+                              }>
+                                {payment.status === 'paid' ? 'Pago' : payment.status === 'pending' ? 'Pendente' : 'Cancelado'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => {
+                                    setEditingPayment(payment);
+                                    setPaymentTarget(null);
+                                    setIsPaymentModalOpen(true);
+                                  }}
+                                  className="text-blue-400 hover:bg-blue-900/20 h-8 w-8"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => deletePaymentMutation.mutate(payment.id)}
+                                  className="text-red-400 hover:bg-red-900/20 h-8 w-8"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              {/* Paginação */}
+              {totalPages > 1 && (
+                <div className="mt-4">
+                  <Pagination>
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          onClick={() => currentPage > 1 && setCurrentPage(currentPage - 1)}
+                          className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                        />
+                      </PaginationItem>
+                      {[...Array(totalPages)].map((_, index) => (
+                        <PaginationItem key={index}>
+                          <PaginationLink
+                            isActive={currentPage === index + 1}
+                            onClick={() => setCurrentPage(index + 1)}
+                            className="cursor-pointer"
+                          >
+                            {index + 1}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                      <PaginationItem>
+                        <PaginationNext
+                          onClick={() => currentPage < totalPages && setCurrentPage(currentPage + 1)}
+                          className={currentPage === totalPages ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
+        </motion.div>
+      </div>
+
+      {/* Modal de Pagamento */}
+      <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
+        <DialogContent className="bg-slate-900 border-slate-700 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-white flex items-center gap-2">
+              <DollarSign className="w-5 h-5 text-green-400" />
+              {editingPayment ? 'Editar Pagamento' : paymentTarget ? `Pagar ${paymentTarget.profile_name}` : 'Novo Pagamento'}
+            </DialogTitle>
+            <DialogDescription className="text-slate-400">
+              {paymentTarget
+                ? `Registrar pagamento de ${paymentTarget.percentage}% do lucro disponível`
+                : 'Preencha os dados do pagamento'
+              }
+            </DialogDescription>
+          </DialogHeader>
+
+          <PaymentFormModal
+            paymentTarget={paymentTarget}
+            editingPayment={editingPayment}
+            profiles={profilesAsPartners}
+            onSave={handleSavePayment}
+            onCancel={() => {
+              setIsPaymentModalOpen(false);
+              setPaymentTarget(null);
+              setEditingPayment(null);
+            }}
+            isLoading={createPaymentMutation.isPending || updatePaymentMutation.isPending}
+          />
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COMPONENTE: FORMULÁRIO DE PAGAMENTO (MODAL)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function PaymentFormModal({ paymentTarget, editingPayment, profiles, onSave, onCancel, isLoading }) {
+  const [amount, setAmount] = useState('');
+  const [profileId, setProfileId] = useState('');
+  const [notes, setNotes] = useState('');
+
+  useEffect(() => {
+    if (paymentTarget) {
+      setAmount(paymentTarget.amount_to_pay.toFixed(2));
+      setProfileId(paymentTarget.profile_id);
+      setNotes(`Pagamento de ${paymentTarget.percentage}% do lucro`);
+    } else if (editingPayment) {
+      setAmount(editingPayment.amount?.toString() || '');
+      setProfileId(editingPayment.profile_id || '');
+      setNotes(editingPayment.notes || '');
+    } else {
+      setAmount('');
+      setProfileId('');
+      setNotes('');
+    }
+  }, [paymentTarget, editingPayment]);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const parsedAmount = parseFloat(amount.replace(',', '.'));
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      toast.error('Informe um valor válido');
+      return;
+    }
+    onSave(parsedAmount, notes);
+  };
+
+  const formatCurrency = (value) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL'
+    }).format(value || 0);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      {/* Seletor de Perfil (apenas se não for pagamento direto) */}
+      {!paymentTarget && (
+        <div>
+          <Label className="text-slate-300">Conta/Parceiro</Label>
+          <Select value={profileId} onValueChange={setProfileId}>
+            <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1">
+              <SelectValue placeholder="Selecione a conta" />
+            </SelectTrigger>
+            <SelectContent className="bg-slate-900 border-slate-700">
+              {profiles.map(profile => (
+                <SelectItem key={profile.id} value={profile.id} className="text-white">
+                  <div className="flex items-center gap-2">
+                    {profile.color && (
+                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: profile.color }} />
+                    )}
+                    {profile.name}
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {/* Resumo do Pagamento (se for pagamento direto) */}
+      {paymentTarget && (
+        <div className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <span className="text-slate-400 block">Lucro Disponível</span>
+              <span className="text-green-400 font-bold">{formatCurrency(paymentTarget.available_profit)}</span>
+            </div>
+            <div>
+              <span className="text-slate-400 block">Porcentagem</span>
+              <span className="text-white font-bold">{paymentTarget.percentage}%</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Valor */}
+      <div>
+        <Label className="text-slate-300">Valor do Pagamento</Label>
+        <div className="relative mt-1">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">R$</span>
+          <Input
+            type="text"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="0,00"
+            className="pl-10 bg-slate-800 border-slate-600 text-white text-lg font-bold h-12"
+          />
+        </div>
+      </div>
+
+      {/* Observações */}
+      <div>
+        <Label className="text-slate-300">Observações (opcional)</Label>
+        <Input
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Ex: Pagamento mensal"
+          className="bg-slate-800 border-slate-600 text-white mt-1"
+        />
+      </div>
+
+      <DialogFooter className="gap-2 pt-4">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onCancel}
+          className="bg-slate-800 border-slate-600 text-slate-300"
+        >
+          Cancelar
+        </Button>
+        <Button
+          type="submit"
+          disabled={isLoading || !amount}
+          className="bg-gradient-to-r from-green-600 to-green-500"
+        >
+          {isLoading ? (
+            <>
+              <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+              Salvando...
+            </>
+          ) : (
+            <>
+              <CheckCircle className="w-4 h-4 mr-2" />
+              {editingPayment ? 'Atualizar' : 'Registrar Pagamento'}
+            </>
+          )}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
