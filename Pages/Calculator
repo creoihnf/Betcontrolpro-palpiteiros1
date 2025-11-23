@@ -1,0 +1,1850 @@
+import React, { useState, useEffect } from 'react';
+import { Plus, Minus, Percent, Circle } from 'lucide-react';
+
+const FORMULAS_MAP = {
+  2: ['1 - 2', '1X - X2', '1X - 2', '1 - X2', 'TO(2.5) - TU(2.5)'],
+  3: ['1 - X - 2', '1X - 12 - X2', 'AH1(-0.25) - X - AH2(+0.25)'],
+  4: ['1 - 2 - 3 - 4'],
+  5: ['1 - 2 - 3 - 4 - 5'],
+  6: ['1 - 2 - 3 - 4 - 5 - 6']
+};
+
+const normalizeDecimalInput = (value) => {
+  if (value === '' || value === null || value === undefined) return '';
+  return String(value).replace(/,/g, '.');
+};
+
+const formatForDisplay = (value) => {
+  if (value === '' || value === null || value === undefined) return '';
+  return String(value).replace('.', ',');
+};
+
+const safeParseFloat = (value, defaultValue = 0) => {
+  if (value === '' || value === null || value === undefined) return defaultValue;
+  const normalized = normalizeDecimalInput(value);
+  const parsed = parseFloat(normalized);
+  return isNaN(parsed) ? defaultValue : parsed;
+};
+
+export default function SurebetCalculator() {
+  const [numberOfOutcomes, setNumberOfOutcomes] = useState(2);
+  const [formula, setFormula] = useState('1 - 2');
+  const [bets, setBets] = useState([]);
+  const [totalStake, setTotalStake] = useState(100);
+  const [totalStakeDisplay, setTotalStakeDisplay] = useState('100');
+  const [roundStakes, setRoundStakes] = useState(false);
+  const [roundValue, setRoundValue] = useState(1);
+
+  // CONTROLE MESTRE C - na linha "Aposta Total"
+  const [masterCMode, setMasterCMode] = useState(false); // C Mestre = OFF por padrão
+
+  useEffect(() => {
+    const defaultOdds = [2.0, 2.0, 3.5, 2.5, 3.0, 2.8];
+    const newBets = [];
+    for (let i = 0; i < numberOfOutcomes; i++) {
+      const oddValue = defaultOdds[i] || 2.0;
+      newBets.push({
+        id: `bet_${i}_${Date.now()}`,
+        type: 'BACK',
+        odd: oddValue,
+        oddDisplay: String(oddValue).replace('.', ','),
+        stake: 0,
+        stakeDisplay: '',
+        commission: 0,
+        commissionDisplay: '',
+        profit: 0,
+        dMode: true, // Por padrão TODAS as apostas têm D marcado (como surebet.com)
+        cMode: false,
+        responsibility: 0,
+        responsibilityDisplay: '',
+        isCommissionActive: false
+      });
+    }
+    setBets(newBets);
+    setFormula(FORMULAS_MAP[numberOfOutcomes][0]);
+  }, [numberOfOutcomes]);
+
+  useEffect(() => {
+    if (bets.length < 2) return;
+
+    const cModeBet = bets.find(b => b.cMode);
+
+    // Recalcular sempre que totalStake ou arredondamento mudar (exceto se C está fixando um stake)
+    if (!cModeBet) {
+      const timer = setTimeout(() => {
+        calculateStakes();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [totalStake, roundStakes, roundValue]);
+
+  const getNetOdd = (bet) => {
+    const commission = safeParseFloat(bet.commission, 0);
+    const odd = safeParseFloat(bet.odd, 2.0);
+
+    if (bet.isCommissionActive && commission > 0) {
+      return 1 + ((odd - 1) * (1 - commission / 100));
+    }
+    return odd;
+  };
+
+  const calculateResponsibility = (backStake, layOdd) => {
+    return backStake * (layOdd - 1);
+  };
+
+  // Aplicar arredondamento
+  const applyRounding = (value) => {
+    if (!roundStakes || roundValue <= 0) return value;
+    return Math.round(value / roundValue) * roundValue;
+  };
+
+  const calculateStakes = () => {
+    const cModeBet = bets.find(b => b.cMode);
+
+    if (cModeBet && !masterCMode) {
+      calculateCMode(cModeBet);
+    } else {
+      // Usar modo de distribuição baseado em D
+      calculateDistributeMode();
+    }
+  };
+
+  // MODO DISTRIBUIÇÃO (como surebet.com)
+  // D marcado = recebe lucro proporcional
+  // D desmarcado = lucro ≈ 0 (retorna apenas o valor apostado)
+  const calculateDistributeMode = () => {
+    const dBets = bets.filter(b => b.dMode);    // Apostas que recebem lucro
+    const noDBets = bets.filter(b => !b.dMode); // Apostas com lucro ≈ 0
+
+    // Se todas têm D ou nenhuma tem D, usar modo normal (lucro igual)
+    if (dBets.length === bets.length || dBets.length === 0) {
+      calculateNormalMode();
+      return;
+    }
+
+    // Calcular stakes para apostas SEM D (lucro ≈ 0)
+    // Para lucro = 0: payout = totalStake, então stake = totalStake / netOdd
+    // Mas precisamos iterar porque o totalStake depende dos stakes
+
+    // Primeiro, calcular a soma das probabilidades implícitas
+    let impliedProbD = 0;    // Soma 1/odd das apostas COM D
+    let impliedProbNoD = 0;  // Soma 1/odd das apostas SEM D
+
+    dBets.forEach(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) impliedProbD += 1 / netOdd;
+    });
+
+    noDBets.forEach(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) impliedProbNoD += 1 / netOdd;
+    });
+
+    // Para apostas SEM D: stake_i = targetPayout / netOdd_i
+    // Para apostas COM D: distribuir o restante proporcionalmente
+    //
+    // targetPayout = soma de todos os stakes
+    // Para apostas SEM D: stake = targetPayout / netOdd
+    // Então: sum(stakes_noD) = targetPayout * impliedProbNoD
+    //
+    // totalStake = sum(stakes_D) + sum(stakes_noD)
+    // targetPayout = totalStake (para que apostas SEM D tenham lucro = 0)
+    //
+    // sum(stakes_noD) = totalStake * impliedProbNoD
+    // sum(stakes_D) = totalStake - totalStake * impliedProbNoD = totalStake * (1 - impliedProbNoD)
+    //
+    // Para apostas COM D, distribuir proporcionalmente:
+    // stake_D_i = (totalStake * (1 - impliedProbNoD) / impliedProbD) / netOdd_i
+
+    const budgetForNoD = totalStake * impliedProbNoD;
+    const budgetForD = totalStake * (1 - impliedProbNoD);
+
+    const newBets = bets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let stake;
+
+      if (!bet.dMode) {
+        // Aposta SEM D - lucro ≈ 0 (payout = totalStake)
+        stake = totalStake / netOdd;
+      } else {
+        // Aposta COM D - recebe lucro proporcional
+        if (impliedProbD > 0) {
+          stake = (budgetForD / impliedProbD) / netOdd;
+        } else {
+          stake = 0;
+        }
+      }
+
+      if (roundStakes && roundValue > 0) {
+        stake = Math.round(stake / roundValue) * roundValue;
+      }
+
+      const responsibility = bet.type === 'LAY' ? calculateResponsibility(stake, netOdd) : 0;
+
+      return {
+        ...bet,
+        stake,
+        stakeDisplay: formatForDisplay(stake.toFixed(2)),
+        responsibility,
+        responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+      };
+    });
+
+    // Calcular lucros
+    const actualTotalStake = newBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = newBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = newBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + bet.responsibility);
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  // MODO D MÚLTIPLO - Múltiplas apostas com stake fixado
+  const calculateMultipleDMode = (dModeBets) => {
+    // Apostas com D ativo têm seus stakes FIXADOS
+    // Apostas sem D são recalculadas proporcionalmente
+    const freeBets = bets.filter(b => !b.dMode);
+
+    // Soma dos stakes fixados (apostas com D)
+    const fixedStakesSum = dModeBets.reduce((sum, bet) => sum + (bet.stake || 0), 0);
+
+    // Orçamento restante para as apostas livres
+    const remainingBudget = totalStake - fixedStakesSum;
+
+    if (freeBets.length === 0 || remainingBudget <= 0) {
+      // Se não há apostas livres ou orçamento acabou, apenas calcular lucros
+      calculateProfitsOnly();
+      return;
+    }
+
+    // Calcular probabilidade implícita das apostas livres
+    let freeImpliedProb = 0;
+    freeBets.forEach(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        freeImpliedProb += 1 / netOdd;
+      }
+    });
+
+    // Distribuir orçamento restante proporcionalmente entre apostas livres
+    const newBets = bets.map(bet => {
+      if (bet.dMode) {
+        // Aposta com D - mantém stake fixado
+        const responsibility = bet.type === 'LAY' ? calculateResponsibility(bet.stake, getNetOdd(bet)) : 0;
+        return {
+          ...bet,
+          responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+
+      // Aposta livre - recalcular proporcionalmente
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0 && freeImpliedProb > 0) {
+        let stake = (remainingBudget / freeImpliedProb) / netOdd;
+
+        if (roundStakes && roundValue > 0) {
+          stake = Math.round(stake / roundValue) * roundValue;
+        }
+
+        const responsibility = bet.type === 'LAY' ? calculateResponsibility(stake, netOdd) : 0;
+
+        return {
+          ...bet,
+          stake,
+          stakeDisplay: formatForDisplay(stake.toFixed(2)),
+          responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+      return bet;
+    });
+
+    const actualTotalStake = newBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = newBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = newBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + bet.responsibility);
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  // Apenas recalcular lucros sem alterar stakes
+  const calculateProfitsOnly = () => {
+    const actualTotalStake = bets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = bets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = bets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + (bet.responsibility || 0));
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  // MODO NORMAL (SUREBET.COM)
+  const calculateNormalMode = () => {
+    let totalImpliedProb = 0;
+
+    bets.forEach(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        totalImpliedProb += 1 / netOdd;
+      }
+    });
+
+    const newBets = bets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        let stake = (totalStake / totalImpliedProb) / netOdd;
+
+        if (roundStakes && roundValue > 0) {
+          stake = Math.round(stake / roundValue) * roundValue;
+        }
+
+        const responsibility = bet.type === 'LAY' ? calculateResponsibility(stake, netOdd) : 0;
+
+        return {
+          ...bet,
+          stake,
+          stakeDisplay: formatForDisplay(stake.toFixed(2)),
+          responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+      return bet;
+    });
+
+    const actualTotalStake = newBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = newBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = newBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + bet.responsibility);
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  // MODO D (SUREBET.COM)
+  const calculateDMode = (dModeBet) => {
+    const otherBets = bets.filter(b => b.id !== dModeBet.id);
+    const netOddD = getNetOdd(dModeBet);
+
+    let totalImpliedProb = 0;
+    otherBets.forEach(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        totalImpliedProb += 1 / netOdd;
+      }
+    });
+
+    const availableBudget = totalStake * totalImpliedProb / (totalImpliedProb + (1 / netOddD));
+
+    const newBets = bets.map(bet => {
+      if (bet.id === dModeBet.id) return bet;
+
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        let stake = (availableBudget / totalImpliedProb) / netOdd;
+
+        if (roundStakes && roundValue > 0) {
+          stake = Math.round(stake / roundValue) * roundValue;
+        }
+
+        const responsibility = bet.type === 'LAY' ? calculateResponsibility(stake, netOdd) : 0;
+        return {
+          ...bet,
+          stake,
+          stakeDisplay: formatForDisplay(stake.toFixed(2)),
+          responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+      return bet;
+    });
+
+    const totalOtherStakes = newBets.reduce((sum, bet) => {
+      if (bet.id === dModeBet.id) return sum;
+      return sum + bet.stake;
+    }, 0);
+
+    const dBetIndex = newBets.findIndex(b => b.id === dModeBet.id);
+    let dStake;
+
+    if (dModeBet.type === 'LAY') {
+      dStake = totalOtherStakes / netOddD;
+      newBets[dBetIndex].responsibility = calculateResponsibility(dStake, netOddD);
+      newBets[dBetIndex].responsibilityDisplay = formatForDisplay(newBets[dBetIndex].responsibility.toFixed(2));
+    } else {
+      dStake = totalOtherStakes / (netOddD - 1);
+      newBets[dBetIndex].responsibility = 0;
+      newBets[dBetIndex].responsibilityDisplay = '';
+    }
+
+    if (roundStakes && roundValue > 0) {
+      dStake = Math.round(dStake / roundValue) * roundValue;
+      if (dModeBet.type === 'LAY') {
+        newBets[dBetIndex].responsibility = calculateResponsibility(dStake, netOddD);
+        newBets[dBetIndex].responsibilityDisplay = formatForDisplay(newBets[dBetIndex].responsibility.toFixed(2));
+      }
+    }
+
+    newBets[dBetIndex].stake = dStake;
+    newBets[dBetIndex].stakeDisplay = formatForDisplay(dStake.toFixed(2));
+
+    const actualTotalStake = newBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = newBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = newBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + bet.responsibility);
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  // MODO C (SUREBET.COM)
+  const calculateCMode = (cModeBet) => {
+    const fixedStake = safeParseFloat(cModeBet.stake, 0);
+    const netOddC = getNetOdd(cModeBet);
+
+    let targetPayout;
+    if (cModeBet.type === 'LAY') {
+      targetPayout = fixedStake;
+    } else {
+      targetPayout = fixedStake * netOddC;
+    }
+
+    const newBets = bets.map(bet => {
+      if (bet.id === cModeBet.id) return bet;
+
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        let stake = targetPayout / netOdd;
+
+        if (roundStakes && roundValue > 0) {
+          stake = Math.round(stake / roundValue) * roundValue;
+        }
+
+        const responsibility = bet.type === 'LAY' ? calculateResponsibility(stake, netOdd) : 0;
+        return {
+          ...bet,
+          stake,
+          stakeDisplay: formatForDisplay(stake.toFixed(2)),
+          responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+      return bet;
+    });
+
+    const cBetIndex = newBets.findIndex(b => b.id === cModeBet.id);
+    if (cModeBet.type === 'LAY') {
+      newBets[cBetIndex].responsibility = calculateResponsibility(fixedStake, netOddC);
+      newBets[cBetIndex].responsibilityDisplay = formatForDisplay(newBets[cBetIndex].responsibility.toFixed(2));
+    } else {
+      newBets[cBetIndex].responsibility = 0;
+      newBets[cBetIndex].responsibilityDisplay = '';
+    }
+
+    const actualTotalStake = newBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = newBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = newBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + bet.responsibility);
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  const handleOddChange = (id, value) => {
+    const newBets = bets.map(bet =>
+      bet.id === id ? { ...bet, oddDisplay: value } : bet
+    );
+    setBets(newBets);
+  };
+
+  const handleOddBlur = (id) => {
+    const bet = bets.find(b => b.id === id);
+    if (!bet) return;
+
+    const parsed = safeParseFloat(bet.oddDisplay, 2.0);
+
+    const newBets = bets.map(b =>
+      b.id === id ? {
+        ...b,
+        odd: parsed,
+        oddDisplay: formatForDisplay(parsed.toFixed(2))
+      } : b
+    );
+
+    setBets(newBets);
+
+    setTimeout(() => {
+      calculateStakesWithUpdatedBets(newBets);
+    }, 50);
+  };
+
+  const calculateStakesWithUpdatedBets = (updatedBets) => {
+    const cModeBet = updatedBets.find(b => b.cMode);
+
+    if (cModeBet && !masterCMode) {
+      calculateCModeWithBets(cModeBet, updatedBets);
+    } else {
+      // Usar modo de distribuição baseado em D
+      calculateDistributeModeWithBets(updatedBets);
+    }
+  };
+
+  // MODO DISTRIBUIÇÃO COM BETS (como surebet.com)
+  const calculateDistributeModeWithBets = (currentBets) => {
+    const dBets = currentBets.filter(b => b.dMode);
+    const noDBets = currentBets.filter(b => !b.dMode);
+
+    // Se todas têm D ou nenhuma tem D, usar modo normal
+    if (dBets.length === currentBets.length || dBets.length === 0) {
+      calculateNormalModeWithBets(currentBets);
+      return;
+    }
+
+    let impliedProbD = 0;
+    let impliedProbNoD = 0;
+
+    dBets.forEach(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) impliedProbD += 1 / netOdd;
+    });
+
+    noDBets.forEach(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) impliedProbNoD += 1 / netOdd;
+    });
+
+    const budgetForD = totalStake * (1 - impliedProbNoD);
+
+    const newBets = currentBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let stake;
+
+      if (!bet.dMode) {
+        stake = totalStake / netOdd;
+      } else {
+        if (impliedProbD > 0) {
+          stake = (budgetForD / impliedProbD) / netOdd;
+        } else {
+          stake = 0;
+        }
+      }
+
+      if (roundStakes && roundValue > 0) {
+        stake = Math.round(stake / roundValue) * roundValue;
+      }
+
+      const responsibility = bet.type === 'LAY' ? calculateResponsibility(stake, netOdd) : 0;
+
+      return {
+        ...bet,
+        stake,
+        stakeDisplay: formatForDisplay(stake.toFixed(2)),
+        responsibility,
+        responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+      };
+    });
+
+    const actualTotalStake = newBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = newBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = newBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + bet.responsibility);
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  // MODO D MÚLTIPLO COM BETS - Múltiplas apostas com stake fixado
+  const calculateMultipleDModeWithBets = (dModeBets, currentBets) => {
+    const freeBets = currentBets.filter(b => !b.dMode);
+
+    const fixedStakesSum = dModeBets.reduce((sum, bet) => sum + (bet.stake || 0), 0);
+    const remainingBudget = totalStake - fixedStakesSum;
+
+    if (freeBets.length === 0 || remainingBudget <= 0) {
+      calculateProfitsOnlyWithBets(currentBets);
+      return;
+    }
+
+    let freeImpliedProb = 0;
+    freeBets.forEach(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        freeImpliedProb += 1 / netOdd;
+      }
+    });
+
+    const newBets = currentBets.map(bet => {
+      if (bet.dMode) {
+        const responsibility = bet.type === 'LAY' ? calculateResponsibility(bet.stake, getNetOdd(bet)) : 0;
+        return {
+          ...bet,
+          responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0 && freeImpliedProb > 0) {
+        let stake = (remainingBudget / freeImpliedProb) / netOdd;
+
+        if (roundStakes && roundValue > 0) {
+          stake = Math.round(stake / roundValue) * roundValue;
+        }
+
+        const responsibility = bet.type === 'LAY' ? calculateResponsibility(stake, netOdd) : 0;
+
+        return {
+          ...bet,
+          stake,
+          stakeDisplay: formatForDisplay(stake.toFixed(2)),
+          responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+      return bet;
+    });
+
+    const actualTotalStake = newBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = newBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = newBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + bet.responsibility);
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  // Apenas recalcular lucros com bets específicos
+  const calculateProfitsOnlyWithBets = (currentBets) => {
+    const actualTotalStake = currentBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = currentBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = currentBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + (bet.responsibility || 0));
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  // NORMAL MODE WITH BETS
+  const calculateNormalModeWithBets = (currentBets) => {
+    let totalImpliedProb = 0;
+
+    currentBets.forEach(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        totalImpliedProb += 1 / netOdd;
+      }
+    });
+
+    const newBets = currentBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        let stake = (totalStake / totalImpliedProb) / netOdd;
+
+        if (roundStakes && roundValue > 0) {
+          stake = Math.round(stake / roundValue) * roundValue;
+        }
+
+        const responsibility = bet.type === 'LAY' ? calculateResponsibility(stake, netOdd) : 0;
+
+        return {
+          ...bet,
+          stake,
+          stakeDisplay: formatForDisplay(stake.toFixed(2)),
+          responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+      return bet;
+    });
+
+    const actualTotalStake = newBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = newBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = newBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + bet.responsibility);
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  // D MODE WITH BETS
+  const calculateDModeWithBets = (dModeBet, currentBets) => {
+    const otherBets = currentBets.filter(b => b.id !== dModeBet.id);
+    const netOddD = getNetOdd(dModeBet);
+
+    let totalImpliedProb = 0;
+    otherBets.forEach(bet => {
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        totalImpliedProb += 1 / netOdd;
+      }
+    });
+
+    const availableBudget = totalStake * totalImpliedProb / (totalImpliedProb + (1 / netOddD));
+
+    const newBets = currentBets.map(bet => {
+      if (bet.id === dModeBet.id) return bet;
+
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        let stake = (availableBudget / totalImpliedProb) / netOdd;
+
+        if (roundStakes && roundValue > 0) {
+          stake = Math.round(stake / roundValue) * roundValue;
+        }
+
+        const responsibility = bet.type === 'LAY' ? calculateResponsibility(stake, netOdd) : 0;
+        return {
+          ...bet,
+          stake,
+          stakeDisplay: formatForDisplay(stake.toFixed(2)),
+          responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+      return bet;
+    });
+
+    const totalOtherStakes = newBets.reduce((sum, bet) => {
+      if (bet.id === dModeBet.id) return sum;
+      return sum + bet.stake;
+    }, 0);
+
+    const dBetIndex = newBets.findIndex(b => b.id === dModeBet.id);
+    let dStake;
+
+    if (dModeBet.type === 'LAY') {
+      dStake = totalOtherStakes / netOddD;
+      newBets[dBetIndex].responsibility = calculateResponsibility(dStake, netOddD);
+      newBets[dBetIndex].responsibilityDisplay = formatForDisplay(newBets[dBetIndex].responsibility.toFixed(2));
+    } else {
+      dStake = totalOtherStakes / (netOddD - 1);
+      newBets[dBetIndex].responsibility = 0;
+      newBets[dBetIndex].responsibilityDisplay = '';
+    }
+
+    if (roundStakes && roundValue > 0) {
+      dStake = Math.round(dStake / roundValue) * roundValue;
+      if (dModeBet.type === 'LAY') {
+        newBets[dBetIndex].responsibility = calculateResponsibility(dStake, netOddD);
+        newBets[dBetIndex].responsibilityDisplay = formatForDisplay(newBets[dBetIndex].responsibility.toFixed(2));
+      }
+    }
+
+    newBets[dBetIndex].stake = dStake;
+    newBets[dBetIndex].stakeDisplay = formatForDisplay(dStake.toFixed(2));
+
+    const actualTotalStake = newBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = newBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = newBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + bet.responsibility);
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  // C MODE WITH BETS
+  const calculateCModeWithBets = (cModeBet, currentBets) => {
+    const fixedStake = safeParseFloat(cModeBet.stake, 0);
+    const netOddC = getNetOdd(cModeBet);
+
+    let targetPayout;
+    if (cModeBet.type === 'LAY') {
+      targetPayout = fixedStake;
+    } else {
+      targetPayout = fixedStake * netOddC;
+    }
+
+    const newBets = currentBets.map(bet => {
+      if (bet.id === cModeBet.id) return bet;
+
+      const netOdd = getNetOdd(bet);
+      if (netOdd > 0) {
+        let stake = targetPayout / netOdd;
+
+        if (roundStakes && roundValue > 0) {
+          stake = Math.round(stake / roundValue) * roundValue;
+        }
+
+        const responsibility = bet.type === 'LAY' ? calculateResponsibility(stake, netOdd) : 0;
+        return {
+          ...bet,
+          stake,
+          stakeDisplay: formatForDisplay(stake.toFixed(2)),
+          responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+      return bet;
+    });
+
+    const cBetIndex = newBets.findIndex(b => b.id === cModeBet.id);
+    if (cModeBet.type === 'LAY') {
+      newBets[cBetIndex].responsibility = calculateResponsibility(fixedStake, netOddC);
+      newBets[cBetIndex].responsibilityDisplay = formatForDisplay(newBets[cBetIndex].responsibility.toFixed(2));
+    } else {
+      newBets[cBetIndex].responsibility = 0;
+      newBets[cBetIndex].responsibilityDisplay = '';
+    }
+
+    const actualTotalStake = newBets.reduce((sum, bet) => sum + bet.stake, 0);
+
+    const updatedBets = newBets.map(bet => {
+      const netOdd = getNetOdd(bet);
+      let profit;
+
+      if (bet.type === 'LAY') {
+        const otherStakes = newBets
+          .filter(b => b.id !== bet.id)
+          .reduce((sum, b) => sum + b.stake, 0);
+        profit = bet.stake - (otherStakes + bet.responsibility);
+      } else {
+        const payout = bet.stake * netOdd;
+        profit = payout - actualTotalStake;
+      }
+
+      return { ...bet, profit };
+    });
+
+    setBets(updatedBets);
+  };
+
+  const handleStakeChange = (id, value) => {
+    const newBets = bets.map(b =>
+      b.id === id ? { ...b, stakeDisplay: value } : b
+    );
+    setBets(newBets);
+  };
+
+  const handleStakeBlur = (id) => {
+    const bet = bets.find(b => b.id === id);
+    if (!bet) return;
+
+    const parsed = safeParseFloat(bet.stakeDisplay, 0);
+    const newBets = bets.map(b =>
+      b.id === id ? {
+        ...b,
+        stake: parsed,
+        stakeDisplay: parsed > 0 ? formatForDisplay(parsed.toFixed(2)) : ''
+      } : b
+    );
+    setBets(newBets);
+
+    const newActualTotal = newBets.reduce((sum, b) => {
+      return sum + (b.type === 'LAY' ? (b.responsibility || 0) : (b.stake || 0));
+    }, 0);
+
+    setTotalStake(newActualTotal);
+    setTotalStakeDisplay(formatForDisplay(newActualTotal.toFixed(2)));
+
+    if (bet.cMode) {
+      setTimeout(() => {
+        const updatedBet = newBets.find(b => b.id === id);
+        calculateCModeWithBets(updatedBet, newBets);
+      }, 50);
+    }
+  };
+
+  const handleResponsibilityChange = (id, value) => {
+    const bet = bets.find(b => b.id === id);
+    if (!bet || bet.type !== 'LAY') return;
+
+    const newBets = bets.map(b =>
+      b.id === id ? { ...b, responsibilityDisplay: value } : b
+    );
+    setBets(newBets);
+  };
+
+  const handleResponsibilityBlur = (id) => {
+    const bet = bets.find(b => b.id === id);
+    if (!bet || bet.type !== 'LAY') return;
+
+    const parsedResp = safeParseFloat(bet.responsibilityDisplay, 0);
+    const netOdd = getNetOdd(bet);
+    const newStake = netOdd > 1 ? parsedResp / (netOdd - 1) : 0;
+
+    const newBets = bets.map(b =>
+      b.id === id ? {
+        ...b,
+        stake: newStake,
+        stakeDisplay: formatForDisplay(newStake.toFixed(2)),
+        responsibility: parsedResp,
+        responsibilityDisplay: formatForDisplay(parsedResp.toFixed(2))
+      } : b
+    );
+    setBets(newBets);
+
+    setTimeout(() => handleStakeBlur(id), 50);
+  };
+
+  const handleCommissionChange = (id, value) => {
+    const newBets = bets.map(bet =>
+      bet.id === id ? { ...bet, commissionDisplay: value } : bet
+    );
+    setBets(newBets);
+  };
+
+  const handleCommissionBlur = (id) => {
+    const bet = bets.find(b => b.id === id);
+    if (!bet) return;
+
+    const parsed = Math.max(0, Math.min(100, safeParseFloat(bet.commissionDisplay, 0)));
+    const newBets = bets.map(b =>
+      b.id === id ? {
+        ...b,
+        commission: parsed,
+        commissionDisplay: parsed > 0 ? formatForDisplay(parsed.toFixed(1)) : ''
+      } : b
+    );
+    setBets(newBets);
+
+    setTimeout(() => {
+      calculateStakesWithUpdatedBets(newBets);
+    }, 50);
+  };
+
+  const toggleBetType = (id) => {
+    const bet = bets.find(b => b.id === id);
+    if (!bet) return;
+
+    const newType = bet.type === 'BACK' ? 'LAY' : 'BACK';
+    const netOdd = getNetOdd(bet);
+    const currentStake = safeParseFloat(bet.stake, 0);
+
+    const newBets = bets.map(b => {
+      if (b.id === id) {
+        const responsibility = newType === 'LAY' && currentStake > 0
+          ? calculateResponsibility(currentStake, netOdd)
+          : 0;
+
+        return {
+          ...b,
+          type: newType,
+          responsibility: responsibility,
+          responsibilityDisplay: responsibility > 0 ? formatForDisplay(responsibility.toFixed(2)) : ''
+        };
+      }
+      return b;
+    });
+
+    setBets(newBets);
+    setTimeout(() => calculateStakesWithUpdatedBets(newBets), 50);
+  };
+
+  const toggleCommission = (id) => {
+    const newBets = bets.map(b =>
+      b.id === id ? { ...b, isCommissionActive: !b.isCommissionActive } : b
+    );
+    setBets(newBets);
+
+    setTimeout(() => {
+      calculateStakesWithUpdatedBets(newBets);
+    }, 50);
+  };
+
+  // TOGGLE D MESTRE - Marca/desmarca D em TODAS as apostas
+  const toggleMasterDMode = () => {
+    // Verificar se todas as apostas já têm D marcado
+    const allHaveD = bets.every(b => b.dMode);
+
+    // Se todas têm D, desmarcar todas. Se alguma não tem, marcar todas.
+    const newDMode = !allHaveD;
+
+    const newBets = bets.map(b => ({
+      ...b,
+      dMode: newDMode
+    }));
+
+    setBets(newBets);
+    setTimeout(() => calculateStakesWithUpdatedBets(newBets), 50);
+  };
+
+  // Verificar se todas as apostas têm D marcado (para o estado visual do botão)
+  const allBetsHaveD = bets.every(b => b.dMode);
+
+  // TOGGLE C MESTRE - Fixa o Stake Total
+  const toggleMasterCMode = () => {
+    const newMasterCMode = !masterCMode;
+    setMasterCMode(newMasterCMode);
+
+    if (newMasterCMode) {
+      // Se C Mestre está sendo ativado:
+      // 1. Aplicar arredondamento ao Total Stake
+      let roundedTotal = totalStake;
+      if (roundStakes && roundValue > 0) {
+        roundedTotal = Math.round(totalStake / roundValue) * roundValue;
+      }
+      setTotalStake(roundedTotal);
+      setTotalStakeDisplay(formatForDisplay(roundedTotal.toFixed(2)));
+
+      // 2. Desativar C em todas as apostas individuais (exclusividade)
+      const newBets = bets.map(b => ({
+        ...b,
+        cMode: false
+      }));
+      setBets(newBets);
+      setTimeout(() => calculateStakesWithUpdatedBets(newBets), 50);
+    }
+  };
+
+  // Toggle D individual - funciona SEMPRE (mesmo com D Mestre ON)
+  // D permite SELEÇÃO MÚLTIPLA - várias apostas podem ter D ativo
+  const toggleDMode = (id) => {
+    setBets(prevBets => {
+      const bet = prevBets.find(b => b.id === id);
+      if (!bet) return prevBets;
+
+      const newDMode = !bet.dMode;
+
+      // D é MÚLTIPLO - NÃO desativa D nas outras apostas
+      // Apenas desativa C nesta aposta se D for ativado
+      const newBets = prevBets.map(b => ({
+        ...b,
+        dMode: b.id === id ? newDMode : b.dMode, // Mantém D nas outras apostas
+        cMode: b.id === id && newDMode ? false : b.cMode // Desativa C apenas nesta aposta se D ativado
+      }));
+
+      setTimeout(() => {
+        calculateStakesWithUpdatedBets(newBets);
+      }, 50);
+
+      return newBets;
+    });
+  };
+
+  // Toggle C individual (só funciona se C Mestre está OFF)
+  const toggleCMode = (id) => {
+    // Se C Mestre está ON, não permitir C individual
+    if (masterCMode) return;
+
+    setBets(prevBets => {
+      const bet = prevBets.find(b => b.id === id);
+      if (!bet) return prevBets;
+
+      const newCMode = !bet.cMode;
+
+      const newBets = prevBets.map(b => ({
+        ...b,
+        cMode: b.id === id ? newCMode : false,
+        dMode: b.id === id && newCMode ? false : b.dMode
+      }));
+
+      if (!newCMode) {
+        setTimeout(() => {
+          calculateStakesWithUpdatedBets(newBets);
+        }, 50);
+      }
+
+      return newBets;
+    });
+  };
+
+  const handleTotalStakeChange = (value) => {
+    setTotalStakeDisplay(value);
+  };
+
+  const handleTotalStakeBlur = () => {
+    let parsed = safeParseFloat(totalStakeDisplay, 100);
+
+    // Se C Mestre está ON, aplicar arredondamento
+    if (masterCMode && roundStakes && roundValue > 0) {
+      parsed = Math.round(parsed / roundValue) * roundValue;
+    }
+
+    setTotalStake(parsed);
+    setTotalStakeDisplay(formatForDisplay(parsed.toFixed(2)));
+  };
+
+  const actualTotalStake = bets.reduce((sum, bet) => {
+    return sum + (bet.type === 'LAY' ? (bet.responsibility || 0) : (bet.stake || 0));
+  }, 0);
+
+  const minProfit = bets.length > 0 ? Math.min(...bets.map(b => b.profit || 0)) : 0;
+  const minProfitPercent = actualTotalStake > 0 ? (minProfit / actualTotalStake) * 100 : 0;
+
+  return (
+    <div style={{
+      width: '100%',
+      minHeight: '100vh',
+      padding: '24px 16px',
+      background: '#0f0f0f',
+      color: '#ffffff',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+    }}>
+      <div style={{
+        maxWidth: '1400px',
+        margin: '0 auto',
+        padding: '0 8px'
+      }}>
+        {/* Header */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '15px',
+          marginBottom: '30px',
+          padding: '20px',
+          background: '#1a1a1a',
+          borderRadius: '12px',
+          border: '1px solid #2a2a2a',
+          flexWrap: 'wrap'
+        }}>
+          <div style={{
+            width: '40px',
+            height: '40px',
+            background: '#2ecc71',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: '8px',
+            fontSize: '24px'
+          }}>📊</div>
+          <h1 style={{
+            color: '#ffc107',
+            fontSize: '24px',
+            fontWeight: 600,
+            margin: 0
+          }}>Calculadora</h1>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            marginLeft: 'auto',
+            flexWrap: 'wrap',
+            justifyContent: 'flex-end'
+          }}>
+            <span style={{
+              fontSize: '20px',
+              fontWeight: 700,
+              color: '#ffffff',
+              whiteSpace: 'nowrap'
+            }}>R$ {formatForDisplay(minProfit.toFixed(2))}</span>
+            <span style={{
+              fontSize: '16px',
+              fontWeight: 600,
+              padding: '6px 12px',
+              borderRadius: '6px',
+              color: minProfitPercent >= 0 ? '#2ecc71' : '#e74c3c',
+              background: minProfitPercent >= 0 ? 'rgba(46, 204, 113, 0.1)' : 'rgba(231, 76, 60, 0.1)',
+              whiteSpace: 'nowrap',
+              minWidth: '60px',
+              textAlign: 'center'
+            }}>{formatForDisplay(minProfitPercent.toFixed(2))}%</span>
+          </div>
+        </div>
+
+        {/* Config Section */}
+        <div style={{
+          background: '#1a1a1a',
+          border: '1px solid #2a2a2a',
+          borderRadius: '12px',
+          padding: '24px',
+          marginBottom: '24px'
+        }}>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+            gap: '20px'
+          }}>
+            <div>
+              <label style={{
+                display: 'block',
+                color: '#888',
+                fontSize: '13px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+                marginBottom: '8px'
+              }}>Número de resultado de aposta segura:</label>
+              <select
+                value={numberOfOutcomes}
+                onChange={(e) => setNumberOfOutcomes(parseInt(e.target.value))}
+                style={{
+                  width: '100%',
+                  background: '#0f0f0f',
+                  border: '1px solid #2a2a2a',
+                  color: '#fff',
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  fontSize: '15px',
+                  cursor: 'pointer'
+                }}
+              >
+                {[2, 3, 4, 5, 6].map(n => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{
+                display: 'block',
+                color: '#888',
+                fontSize: '13px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+                marginBottom: '8px'
+              }}>Tipo de aposta segura (fórmula):</label>
+              <select
+                value={formula}
+                onChange={(e) => setFormula(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: '#0f0f0f',
+                  border: '1px solid #2a2a2a',
+                  color: '#fff',
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  fontSize: '15px',
+                  cursor: 'pointer'
+                }}
+              >
+                {FORMULAS_MAP[numberOfOutcomes].map(f => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Guaranteed Profit Bar */}
+        <div style={{
+          background: '#1a1a1a',
+          border: '1px solid #2a2a2a',
+          borderRadius: '12px',
+          padding: '15px 20px',
+          marginBottom: '20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between'
+        }}>
+          <span style={{ color: '#888', fontSize: '14px' }}>Lucro Garantido:</span>
+          <span style={{
+            fontSize: '20px',
+            fontWeight: 600,
+            color: minProfitPercent >= 0 ? '#2ecc71' : '#e74c3c'
+          }}>{formatForDisplay(minProfitPercent.toFixed(2))}%</span>
+        </div>
+
+        {/* Main Table */}
+        <div style={{
+          background: '#1a1a1a',
+          border: '1px solid #2a2a2a',
+          borderRadius: '12px',
+          padding: '24px 20px',
+          overflowX: 'auto'
+        }}>
+          <div style={{ minWidth: '900px' }}>
+            {/* Header */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: bets.some(b => b.isCommissionActive)
+                ? '40px 150px 100px 40px 100px 110px 120px 100px 120px'
+                : '40px 150px 100px 40px 120px 100px 120px',
+              gap: '12px',
+              padding: '12px 0',
+              borderBottom: '1px solid #2a2a2a',
+              marginBottom: '15px'
+            }}>
+              <span style={{ color: '#888', fontSize: '12px' }}></span>
+              <span style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase' }}>Aposta</span>
+              <span style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase' }}>ODD</span>
+              <span style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase' }}>%</span>
+              {bets.some(b => b.isCommissionActive) && (
+                <>
+                  <span style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase' }}>Comissão</span>
+                  <span style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase' }}>Odd Líq.</span>
+                </>
+              )}
+              <span style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase' }}>Stake</span>
+              <span style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase' }}>Ações</span>
+              <span style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase' }}>Lucro</span>
+            </div>
+
+            {/* Bet Rows */}
+            {bets.map((bet, index) => {
+              // Verificar se toggle C está desabilitado (quando C Mestre está ON)
+              const isCToggleDisabled = masterCMode;
+
+              return (
+                <React.Fragment key={bet.id}>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: bets.some(b => b.isCommissionActive)
+                      ? '40px 150px 100px 40px 100px 110px 120px 100px 120px'
+                      : '40px 150px 100px 40px 120px 100px 120px',
+                    gap: '12px',
+                    padding: '16px 0',
+                    borderBottom: '1px solid #222',
+                    alignItems: 'start'
+                  }}>
+                    {/* Toggle Back/Lay */}
+                    <div
+                      onClick={() => toggleBetType(bet.id)}
+                      style={{
+                        width: '32px',
+                        height: '32px',
+                        background: bet.type === 'LAY' ? 'linear-gradient(135deg, #e74c3c, #c0392b)' : 'linear-gradient(135deg, #2ecc71, #27ae60)',
+                        border: 'none',
+                        borderRadius: '6px',
+                        color: '#fff',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: 'all 0.2s ease',
+                        boxShadow: bet.type === 'LAY' ? '0 4px 12px rgba(231, 76, 60, 0.3)' : '0 4px 12px rgba(46, 204, 113, 0.3)'
+                      }}
+                      title={bet.type === 'LAY' ? 'Clique para BACK' : 'Clique para LAY'}
+                    >
+                      {bet.type === 'LAY' ? <Minus size={18} strokeWidth={3} /> : <Plus size={18} strokeWidth={3} />}
+                    </div>
+
+                    <span style={{
+                      color: '#ffc107',
+                      fontWeight: 600,
+                      fontSize: '15px'
+                    }}>Aposta {index + 1}</span>
+
+                    <input
+                      type="text"
+                      value={bet.oddDisplay || ''}
+                      onChange={(e) => handleOddChange(bet.id, e.target.value)}
+                      onBlur={() => handleOddBlur(bet.id)}
+                      placeholder="Ex: 2,35"
+                      style={{
+                        background: '#0f0f0f',
+                        border: '1px solid #2a2a2a',
+                        color: '#fff',
+                        padding: '10px 12px',
+                        borderRadius: '6px',
+                        fontSize: '14px',
+                        width: '100%',
+                        textAlign: 'center'
+                      }}
+                    />
+
+                    {/* Toggle % */}
+                    <div
+                      onClick={() => toggleCommission(bet.id)}
+                      style={{
+                        width: '32px',
+                        height: '32px',
+                        background: bet.isCommissionActive ? '#ffc107' : '#2a2a2a',
+                        border: 'none',
+                        borderRadius: '6px',
+                        color: bet.isCommissionActive ? '#000' : '#888',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: 'all 0.2s ease'
+                      }}
+                      title={bet.isCommissionActive ? 'Desativar comissão' : 'Ativar comissão'}
+                    >
+                      <Percent size={16} strokeWidth={2.5} />
+                    </div>
+
+                    {/* Commission columns */}
+                    {bets.some(b => b.isCommissionActive) && (
+                      <>
+                        {bet.isCommissionActive ? (
+                          <input
+                            type="text"
+                            value={bet.commissionDisplay || ''}
+                            onChange={(e) => handleCommissionChange(bet.id, e.target.value)}
+                            onBlur={() => handleCommissionBlur(bet.id)}
+                            placeholder="0%"
+                            style={{
+                              background: 'rgba(255, 193, 7, 0.1)',
+                              border: '1px solid #ffc107',
+                              color: '#fff',
+                              padding: '10px 12px',
+                              borderRadius: '6px',
+                              fontSize: '14px',
+                              width: '100%',
+                              textAlign: 'center'
+                            }}
+                          />
+                        ) : (
+                          <span style={{ color: '#555', fontSize: '12px', textAlign: 'center' }}>-</span>
+                        )}
+
+                        {bet.isCommissionActive ? (
+                          <span style={{
+                            color: bet.commission > 0 ? '#ffc107' : '#888',
+                            fontSize: '14px',
+                            fontWeight: bet.commission > 0 ? 700 : 600,
+                            textAlign: 'center',
+                            fontFamily: 'monospace'
+                          }}>
+                            {formatForDisplay(getNetOdd(bet).toFixed(3))}
+                          </span>
+                        ) : (
+                          <span style={{ color: '#555', fontSize: '12px', textAlign: 'center' }}>-</span>
+                        )}
+                      </>
+                    )}
+
+                    {/* Stake/Responsibility */}
+                    {bet.type === 'LAY' ? (
+                      <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                        width: '100%'
+                      }}>
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '4px'
+                        }}>
+                          <label style={{
+                            fontSize: '11px',
+                            color: '#888',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.5px'
+                          }}>Responsabilidade</label>
+                          <input
+                            type="text"
+                            value={bet.responsibilityDisplay || ''}
+                            onChange={(e) => handleResponsibilityChange(bet.id, e.target.value)}
+                            onBlur={() => handleResponsibilityBlur(bet.id)}
+                            placeholder="Ex: 75,00"
+                            style={{
+                              background: '#0f0f0f',
+                              border: '1px solid #2a2a2a',
+                              color: '#fff',
+                              padding: '10px 12px',
+                              borderRadius: '6px',
+                              fontSize: '14px',
+                              width: '100%',
+                              textAlign: 'center'
+                            }}
+                          />
+                        </div>
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '4px'
+                        }}>
+                          <label style={{
+                            fontSize: '10px',
+                            color: '#666',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.5px'
+                          }}>Stake Lay</label>
+                          <input
+                            type="text"
+                            value={bet.stakeDisplay || ''}
+                            onChange={(e) => handleStakeChange(bet.id, e.target.value)}
+                            onBlur={() => handleStakeBlur(bet.id)}
+                            placeholder="Ex: 50,00"
+                            style={{
+                              background: '#0f0f0f',
+                              border: bet.cMode ? '2px solid #4caf50' : '1px solid #2a2a2a',
+                              color: '#888',
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              fontSize: '13px',
+                              width: '100%',
+                              textAlign: 'center',
+                              opacity: 0.7,
+                              cursor: 'text'
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        value={bet.stakeDisplay || ''}
+                        onChange={(e) => handleStakeChange(bet.id, e.target.value)}
+                        onBlur={() => handleStakeBlur(bet.id)}
+                        placeholder="Ex: 150,00"
+                        style={{
+                          background: '#0f0f0f',
+                          border: bet.cMode ? '2px solid #4caf50' : '1px solid #2a2a2a',
+                          color: '#fff',
+                          padding: '10px 12px',
+                          borderRadius: '6px',
+                          fontSize: '14px',
+                          width: '100%',
+                          textAlign: 'center'
+                        }}
+                      />
+                    )}
+
+                    {/* D/C buttons */}
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                      <button
+                        onClick={() => toggleDMode(bet.id)}
+                        style={{
+                          padding: '8px 12px',
+                          background: bet.dMode ? '#ffc107' : '#2a2a2a',
+                          border: bet.dMode ? '2px solid #ffc107' : '1px solid #3a3a3a',
+                          borderRadius: '6px',
+                          color: bet.dMode ? '#000' : '#888',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          fontWeight: bet.dMode ? 700 : 600,
+                          transition: 'all 0.2s ease',
+                          userSelect: 'none',
+                          minWidth: '36px'
+                        }}
+                        title={bet.dMode ? 'D ON: Lucro distribuído para esta aposta' : 'D OFF: Lucro ≈ 0 para esta aposta'}
+                      >D</button>
+                      <button
+                        onClick={() => toggleCMode(bet.id)}
+                        disabled={isCToggleDisabled}
+                        style={{
+                          padding: '8px 12px',
+                          background: bet.cMode ? '#ffc107' : '#2a2a2a',
+                          border: bet.cMode ? '2px solid #ffc107' : '1px solid #3a3a3a',
+                          borderRadius: '6px',
+                          color: bet.cMode ? '#000' : '#888',
+                          cursor: isCToggleDisabled ? 'not-allowed' : 'pointer',
+                          fontSize: '13px',
+                          fontWeight: bet.cMode ? 700 : 600,
+                          transition: 'all 0.2s ease',
+                          userSelect: 'none',
+                          minWidth: '36px',
+                          opacity: isCToggleDisabled ? 0.5 : 1
+                        }}
+                        title={isCToggleDisabled ? 'C Mestre está ON' : 'Toggle C'}
+                      >C</button>
+                    </div>
+
+                    <span style={{
+                      color: (bet.profit || 0) >= 0 ? '#2ecc71' : '#e74c3c',
+                      fontWeight: 700,
+                      fontSize: '15px',
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap',
+                      display: 'block'
+                    }}>R$ {formatForDisplay((bet.profit || 0).toFixed(2))}</span>
+                  </div>
+                </React.Fragment>
+              );
+            })}
+
+            {/* Total Row - COM CONTROLES MESTRES D E C */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: bets.some(b => b.isCommissionActive)
+                ? '40px 150px 100px 40px 100px 110px 120px 100px 120px'
+                : '40px 150px 100px 40px 120px 100px 120px',
+              gap: '12px',
+              padding: '15px 0',
+              borderTop: '2px solid #2a2a2a',
+              marginTop: '15px',
+              fontWeight: 600,
+              alignItems: 'center'
+            }}>
+              <span></span>
+              <span style={{ color: '#888' }}>Aposta total:</span>
+              <span></span>
+              <span></span>
+              {bets.some(b => b.isCommissionActive) && (
+                <>
+                  <span></span>
+                  <span></span>
+                </>
+              )}
+              <input
+                type="text"
+                value={totalStakeDisplay}
+                onChange={(e) => handleTotalStakeChange(e.target.value)}
+                onBlur={handleTotalStakeBlur}
+                placeholder="Ex: 100,00"
+                style={{
+                  background: '#0f0f0f',
+                  border: masterCMode ? '2px solid #4caf50' : '2px solid #ffc107',
+                  color: masterCMode ? '#4caf50' : '#ffc107',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  fontSize: '16px',
+                  fontWeight: 700,
+                  width: '100%',
+                  textAlign: 'center'
+                }}
+              />
+              {/* CONTROLES MESTRES D E C */}
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                <button
+                  onClick={toggleMasterDMode}
+                  style={{
+                    padding: '8px 12px',
+                    background: allBetsHaveD ? '#ffc107' : '#2a2a2a',
+                    border: allBetsHaveD ? '2px solid #ffc107' : '1px solid #3a3a3a',
+                    borderRadius: '6px',
+                    color: allBetsHaveD ? '#000' : '#888',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: allBetsHaveD ? 700 : 600,
+                    transition: 'all 0.2s ease',
+                    userSelect: 'none',
+                    minWidth: '36px'
+                  }}
+                  title={allBetsHaveD ? 'D ON: Lucro distribuído em todas' : 'D OFF: Clique para marcar D em todas'}
+                >D</button>
+                <button
+                  onClick={toggleMasterCMode}
+                  style={{
+                    padding: '8px 12px',
+                    background: masterCMode ? '#4caf50' : '#2a2a2a',
+                    border: masterCMode ? '2px solid #4caf50' : '1px solid #3a3a3a',
+                    borderRadius: '6px',
+                    color: masterCMode ? '#fff' : '#888',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: masterCMode ? 700 : 600,
+                    transition: 'all 0.2s ease',
+                    userSelect: 'none',
+                    minWidth: '36px'
+                  }}
+                  title={masterCMode ? 'C MESTRE ON: Stake Total fixado' : 'C MESTRE OFF: Controle individual'}
+                >C</button>
+              </div>
+              <span style={{
+                color: '#ffc107',
+                fontSize: '16px',
+                fontWeight: 700,
+                textAlign: 'right'
+              }}>R$ {formatForDisplay(actualTotalStake.toFixed(2))}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Options */}
+        <div style={{
+          marginTop: '20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px'
+        }}>
+          <button
+            onClick={() => {
+              const anyActive = bets.some(b => b.isCommissionActive);
+              const newBets = bets.map(b => ({ ...b, isCommissionActive: !anyActive }));
+              setBets(newBets);
+              setTimeout(() => calculateStakesWithUpdatedBets(newBets), 50);
+            }}
+            style={{
+              padding: '10px 16px',
+              background: bets.some(b => b.isCommissionActive) ? '#ffc107' : '#2a2a2a',
+              border: 'none',
+              borderRadius: '8px',
+              color: bets.some(b => b.isCommissionActive) ? '#000' : '#888',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              transition: 'all 0.2s ease',
+              maxWidth: '300px'
+            }}
+          >
+            <Percent size={16} />
+            {bets.some(b => b.isCommissionActive) ? 'Ocultar colunas de comissão' : 'Mostrar colunas de comissão'}
+          </button>
+
+          <button
+            onClick={() => setRoundStakes(!roundStakes)}
+            style={{
+              padding: '10px 16px',
+              background: roundStakes ? '#3498db' : '#2a2a2a',
+              border: 'none',
+              borderRadius: '8px',
+              color: roundStakes ? '#fff' : '#888',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              transition: 'all 0.2s ease',
+              maxWidth: '300px'
+            }}
+          >
+            <Circle size={16} />
+            {roundStakes ? 'Ocultar arredondamento' : 'Mostrar arredondamento'}
+          </button>
+
+          {roundStakes && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              marginLeft: '10px',
+              padding: '10px',
+              background: '#1a1a1a',
+              borderRadius: '8px',
+              border: '1px solid #3498db'
+            }}>
+              <span style={{ color: '#888', fontSize: '14px' }}>Arredondar até:</span>
+              <input
+                type="number"
+                value={roundValue}
+                onChange={(e) => setRoundValue(parseFloat(e.target.value) || 1)}
+                min="0.01"
+                step="0.01"
+                style={{
+                  width: '80px',
+                  background: '#0f0f0f',
+                  border: '1px solid #3498db',
+                  color: '#fff',
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  fontSize: '14px'
+                }}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
