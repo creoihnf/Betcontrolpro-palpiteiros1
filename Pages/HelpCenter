@@ -1,0 +1,697 @@
+import React, { useState, useMemo, useEffect } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Search,
+  HelpCircle,
+  ThumbsUp,
+  ThumbsDown,
+  MessageCircle,
+  Video,
+  ExternalLink,
+  ChevronDown,
+  Calculator,
+  Wallet,
+  BarChart3,
+  Zap,
+  Settings,
+  TrendingUp,
+  ArrowLeft,
+  X,
+  Send
+} from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * PÁGINA DE AJUDA - CENTRAL DE SUPORTE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Design UX:
+ * - Busca proeminente e centralizada
+ * - Categorias com ícones visuais em grid responsivo
+ * - Acordeões com transições suaves para FAQs
+ * - Layout clean com whitespace generoso
+ */
+
+// Configuração do Telegram para suporte
+const TELEGRAM_USERNAME = "ospalpiteiros"; // Altere para seu username
+const TELEGRAM_URL = `https://t.me/${TELEGRAM_USERNAME}`;
+
+// Categorias com ícones visuais
+const HELP_CATEGORIES = [
+  {
+    id: 'inicio',
+    label: 'Início Rápido',
+    icon: Zap,
+    color: '#22c55e',
+    description: 'Primeiros passos e configurações iniciais'
+  },
+  {
+    id: 'calculadoras',
+    label: 'Calculadoras',
+    icon: Calculator,
+    color: '#3b82f6',
+    description: 'Como usar as ferramentas de cálculo'
+  },
+  {
+    id: 'contas',
+    label: 'Gerenciamento de Contas',
+    icon: Wallet,
+    color: '#8b5cf6',
+    description: 'Carteiras, perfis e casas de apostas'
+  },
+  {
+    id: 'financas',
+    label: 'Finanças',
+    icon: TrendingUp,
+    color: '#d4af37',
+    description: 'Lucros, pagamentos e relatórios'
+  },
+  {
+    id: 'apostas',
+    label: 'Apostas',
+    icon: BarChart3,
+    color: '#ef4444',
+    description: 'Registro e gerenciamento de apostas'
+  },
+  {
+    id: 'geral',
+    label: 'Configurações',
+    icon: Settings,
+    color: '#64748b',
+    description: 'Preferências e ajustes gerais'
+  }
+];
+
+// FAQs estáticas (fallback quando API não tem dados)
+const DEFAULT_FAQS = [
+  {
+    id: 'faq-1',
+    category: 'inicio',
+    question: 'Como começar a usar o BetControl Pro?',
+    answer: 'Para começar, siga estes passos:\n\n1. Acesse a página "Contas" e crie sua primeira carteira\n2. Adicione as casas de apostas que você utiliza\n3. Configure os perfis (sua conta principal e contas de terceiros)\n4. Comece a registrar suas apostas na página "Apostas"\n\nO sistema calculará automaticamente seu lucro, ROI e estatísticas.',
+    tags: ['inicio', 'configuracao', 'primeiro uso']
+  },
+  {
+    id: 'faq-2',
+    category: 'calculadoras',
+    question: 'Como funciona a calculadora de Lay?',
+    answer: 'A calculadora de Lay ajuda você a calcular o stake ideal para apostas de lay (contra).\n\n1. Insira a odd back (a favor)\n2. Insira a odd lay (contra)\n3. Insira o valor do stake back\n4. O sistema calculará automaticamente o stake lay e o liability\n\nIsso é especialmente útil para operações de trading e matched betting.',
+    tags: ['lay', 'calculadora', 'trading']
+  },
+  {
+    id: 'faq-3',
+    category: 'contas',
+    question: 'Qual a diferença entre Conta Principal e Conta de Terceiro?',
+    answer: 'Conta Principal: É sua conta pessoal, onde você gerencia seu próprio bankroll.\n\nConta de Terceiro: São contas que você opera para outras pessoas, com configuração de porcentagem de repasse do lucro.\n\nNo sistema, você pode configurar a porcentagem de pagamento (ex: 30% do lucro) para cada conta de terceiro, e o sistema calculará automaticamente quanto você deve repassar.',
+    tags: ['contas', 'terceiros', 'repasse']
+  },
+  {
+    id: 'faq-4',
+    category: 'financas',
+    question: 'Como é calculado o P&L (Lucro/Prejuízo)?',
+    answer: 'O P&L é calculado considerando:\n\n• Lucros das apostas (greens)\n• Prejuízos das apostas (reds)\n• Lucros rápidos (bônus, cashbacks)\n• Stakes e comissões\n\nFórmula: P&L = Retornos - Stakes - Comissões\n\nO ROI é calculado como: ROI = (P&L / Stakes Totais) × 100',
+    tags: ['pnl', 'lucro', 'roi', 'calculo']
+  },
+  {
+    id: 'faq-5',
+    category: 'apostas',
+    question: 'Como registrar uma aposta com proteção?',
+    answer: 'Para registrar uma aposta com proteção:\n\n1. Clique em "Nova Aposta"\n2. Preencha os dados da aposta principal (back)\n3. Clique em "Adicionar Proteção"\n4. Insira a casa de apostas, odd e stake da proteção (lay)\n5. O sistema calculará automaticamente o lucro/prejuízo potencial\n\nVocê pode adicionar múltiplas proteções em diferentes casas.',
+    tags: ['aposta', 'protecao', 'lay', 'registro']
+  },
+  {
+    id: 'faq-6',
+    category: 'geral',
+    question: 'Como alterar a porcentagem de repasse de um parceiro?',
+    answer: 'Para alterar a porcentagem de repasse:\n\n1. Vá para a página "Pagamentos"\n2. Na aba "Contas", encontre o parceiro desejado\n3. Use o seletor de porcentagem (5% a 50%)\n4. O valor a pagar será recalculado automaticamente\n5. Clique em "Salvar" para persistir a alteração\n\nVocê também pode alterar diretamente nas configurações do perfil.',
+    tags: ['parceiro', 'repasse', 'porcentagem', 'pagamento']
+  }
+];
+
+export default function HelpCenterPage() {
+  const queryClient = useQueryClient();
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [expandedFaq, setExpandedFaq] = useState(null);
+  const [isMobile, setIsMobile] = useState(false);
+  const [showSearchResults, setShowSearchResults] = useState(false);
+
+  // Detectar mobile
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Query FAQs da API
+  const { data: apiFaqs = [], isLoading } = useQuery({
+    queryKey: ['faq-items'],
+    queryFn: async () => {
+      try {
+        const data = await base44.entities.FAQItem.filter({ is_published: true });
+        return Array.isArray(data) ? data : [];
+      } catch {
+        return [];
+      }
+    },
+    staleTime: 10 * 60 * 1000
+  });
+
+  // Combinar FAQs da API com defaults
+  const allFaqs = useMemo(() => {
+    if (apiFaqs.length > 0) return apiFaqs;
+    return DEFAULT_FAQS;
+  }, [apiFaqs]);
+
+  // Mutation para feedback
+  const markHelpfulMutation = useMutation({
+    mutationFn: async ({ faqId, isHelpful }) => {
+      const faq = allFaqs.find(f => f.id === faqId);
+      if (!faq || faq.id.startsWith('faq-')) return; // Não atualiza FAQs locais
+
+      await base44.entities.FAQItem.update(faqId, {
+        helpful_count: isHelpful ? (faq.helpful_count || 0) + 1 : faq.helpful_count,
+        not_helpful_count: !isHelpful ? (faq.not_helpful_count || 0) + 1 : faq.not_helpful_count
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['faq-items']);
+      toast.success('Obrigado pelo feedback!');
+    }
+  });
+
+  // Filtrar FAQs por busca
+  const searchResults = useMemo(() => {
+    if (!searchTerm.trim()) return [];
+
+    const term = searchTerm.toLowerCase();
+    return allFaqs.filter(faq =>
+      faq.question.toLowerCase().includes(term) ||
+      faq.answer.toLowerCase().includes(term) ||
+      (faq.tags || []).some(tag => tag.toLowerCase().includes(term))
+    );
+  }, [searchTerm, allFaqs]);
+
+  // Filtrar FAQs por categoria
+  const categoryFaqs = useMemo(() => {
+    if (!selectedCategory) return [];
+    return allFaqs.filter(faq => faq.category === selectedCategory);
+  }, [selectedCategory, allFaqs]);
+
+  // Handlers
+  const handleSearch = (value) => {
+    setSearchTerm(value);
+    setShowSearchResults(value.trim().length > 0);
+    if (value.trim()) {
+      setSelectedCategory(null);
+    }
+  };
+
+  const handleSelectCategory = (categoryId) => {
+    setSelectedCategory(categoryId);
+    setSearchTerm('');
+    setShowSearchResults(false);
+    setExpandedFaq(null);
+  };
+
+  const handleBackToCategories = () => {
+    setSelectedCategory(null);
+    setExpandedFaq(null);
+  };
+
+  const handleSelectSearchResult = (faq) => {
+    setSelectedCategory(faq.category);
+    setExpandedFaq(faq.id);
+    setSearchTerm('');
+    setShowSearchResults(false);
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER: ACCORDION FAQ ITEM
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const renderFaqItem = (faq, index) => {
+    const isExpanded = expandedFaq === faq.id;
+
+    return (
+      <motion.div
+        key={faq.id}
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: index * 0.05 }}
+      >
+        <div
+          className={`rounded-xl overflow-hidden transition-all duration-300 ${
+            isExpanded
+              ? 'bg-slate-800 border-2 border-green-600/50'
+              : 'bg-slate-800/50 border border-slate-700 hover:border-slate-600'
+          }`}
+        >
+          {/* Header do Accordion */}
+          <button
+            onClick={() => setExpandedFaq(isExpanded ? null : faq.id)}
+            className="w-full p-5 text-left flex items-start justify-between gap-4"
+          >
+            <div className="flex-1">
+              <h3 className="text-white font-semibold text-lg leading-tight">
+                {faq.question}
+              </h3>
+              {!isExpanded && faq.tags && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {faq.tags.slice(0, 3).map(tag => (
+                    <Badge
+                      key={tag}
+                      variant="outline"
+                      className="text-xs bg-slate-900/50 border-slate-600 text-slate-400"
+                    >
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+            <motion.div
+              animate={{ rotate: isExpanded ? 180 : 0 }}
+              transition={{ duration: 0.3 }}
+              className="flex-shrink-0 mt-1"
+            >
+              <ChevronDown className={`w-5 h-5 ${isExpanded ? 'text-green-400' : 'text-slate-400'}`} />
+            </motion.div>
+          </button>
+
+          {/* Conteúdo do Accordion */}
+          <AnimatePresence>
+            {isExpanded && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                className="overflow-hidden"
+              >
+                <div className="px-5 pb-5">
+                  {/* Resposta */}
+                  <div className="p-4 rounded-lg bg-slate-900/70 border border-slate-700 mb-4">
+                    <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">
+                      {faq.answer}
+                    </p>
+                  </div>
+
+                  {/* Vídeo Tutorial */}
+                  {faq.video_url && (
+                    <Button
+                      variant="outline"
+                      className="mb-4 border-blue-600 text-blue-400 hover:bg-blue-900/20"
+                      onClick={() => window.open(faq.video_url, '_blank')}
+                    >
+                      <Video className="w-4 h-4 mr-2" />
+                      Ver Tutorial em Vídeo
+                      <ExternalLink className="w-3 h-3 ml-2" />
+                    </Button>
+                  )}
+
+                  {/* Feedback */}
+                  <div className="flex items-center gap-4 pt-4 border-t border-slate-700">
+                    <span className="text-sm text-slate-400">Isso foi útil?</span>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => markHelpfulMutation.mutate({ faqId: faq.id, isHelpful: true })}
+                        className="text-green-400 hover:text-green-300 hover:bg-green-900/20"
+                      >
+                        <ThumbsUp className="w-4 h-4 mr-1" />
+                        Sim
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => markHelpfulMutation.mutate({ faqId: faq.id, isHelpful: false })}
+                        className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
+                      >
+                        <ThumbsDown className="w-4 h-4 mr-1" />
+                        Não
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </motion.div>
+    );
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER PRINCIPAL
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  return (
+    <div style={{
+      width: '100%',
+      minHeight: '100vh',
+      padding: isMobile ? '24px 16px' : '48px 32px',
+      background: '#0a0a0a'
+    }}>
+      <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            SEÇÃO HERO - BUSCA PROEMINENTE
+        ═══════════════════════════════════════════════════════════════════ */}
+        {!selectedCategory && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-center mb-12"
+          >
+            {/* Mensagem de Boas-Vindas */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.1 }}
+              className="mb-8"
+            >
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-full mb-6" style={{
+                background: 'linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(212, 175, 55, 0.1))',
+                border: '2px solid rgba(34, 197, 94, 0.3)'
+              }}>
+                <HelpCircle className="w-10 h-10 text-green-400" />
+              </div>
+              <h1 style={{
+                fontSize: isMobile ? '28px' : '40px',
+                fontWeight: 900,
+                color: '#ffffff',
+                marginBottom: '12px',
+                letterSpacing: '-1px'
+              }}>
+                Como podemos te ajudar?
+              </h1>
+              <p style={{
+                color: 'rgba(176, 176, 176, 0.8)',
+                fontSize: isMobile ? '14px' : '16px',
+                maxWidth: '500px',
+                margin: '0 auto'
+              }}>
+                Encontre respostas para suas dúvidas ou explore as categorias abaixo
+              </p>
+            </motion.div>
+
+            {/* Barra de Busca Grande */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="relative max-w-2xl mx-auto"
+            >
+              <div className="relative">
+                <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-6 h-6 text-slate-400" />
+                <Input
+                  placeholder="Buscar dúvidas... (ex: Lay, P&L, Repasse)"
+                  value={searchTerm}
+                  onChange={(e) => handleSearch(e.target.value)}
+                  className="w-full h-16 pl-14 pr-12 text-lg bg-slate-800/80 border-2 border-slate-700 text-white rounded-2xl focus:border-green-500 transition-colors"
+                  style={{ fontSize: isMobile ? '16px' : '18px' }}
+                />
+                {searchTerm && (
+                  <button
+                    onClick={() => handleSearch('')}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-slate-700"
+                  >
+                    <X className="w-5 h-5 text-slate-400" />
+                  </button>
+                )}
+              </div>
+
+              {/* Resultados da Busca (Dropdown) */}
+              <AnimatePresence>
+                {showSearchResults && searchResults.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="absolute top-full left-0 right-0 mt-2 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl overflow-hidden z-50"
+                  >
+                    <div className="p-2 border-b border-slate-700">
+                      <span className="text-xs text-slate-400 px-2">
+                        {searchResults.length} resultado{searchResults.length !== 1 ? 's' : ''} encontrado{searchResults.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div className="max-h-80 overflow-y-auto">
+                      {searchResults.map((faq) => {
+                        const category = HELP_CATEGORIES.find(c => c.id === faq.category);
+                        return (
+                          <button
+                            key={faq.id}
+                            onClick={() => handleSelectSearchResult(faq)}
+                            className="w-full p-4 text-left hover:bg-slate-700/50 transition-colors border-b border-slate-700/50 last:border-0"
+                          >
+                            <div className="flex items-start gap-3">
+                              <div
+                                className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                                style={{ background: `${category?.color}20` }}
+                              >
+                                {category?.icon && <category.icon className="w-4 h-4" style={{ color: category.color }} />}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-white font-medium truncate">{faq.question}</p>
+                                <p className="text-xs text-slate-400 mt-1">{category?.label}</p>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Nenhum resultado */}
+              <AnimatePresence>
+                {showSearchResults && searchTerm && searchResults.length === 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="absolute top-full left-0 right-0 mt-2 bg-slate-800 border border-slate-700 rounded-xl p-6 text-center"
+                  >
+                    <HelpCircle className="w-10 h-10 text-slate-600 mx-auto mb-2" />
+                    <p className="text-slate-400">Nenhum resultado para "{searchTerm}"</p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            GRID DE CATEGORIAS
+        ═══════════════════════════════════════════════════════════════════ */}
+        {!selectedCategory && !showSearchResults && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+          >
+            <h2 className="text-xl font-bold text-white mb-8 text-center">
+              Explore por Categoria
+            </h2>
+
+            {/* Grid com enquadramento responsivo e espaçamento consistente */}
+            <div
+              className="grid gap-5"
+              style={{
+                gridTemplateColumns: isMobile
+                  ? '1fr'
+                  : 'repeat(auto-fit, minmax(300px, 1fr))',
+                padding: isMobile ? '0' : '0 8px'
+              }}
+            >
+              {HELP_CATEGORIES.map((category, index) => {
+                const Icon = category.icon;
+                const categoryCount = allFaqs.filter(f => f.category === category.id).length;
+
+                return (
+                  <motion.div
+                    key={category.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.08 * index }}
+                    whileHover={{ scale: 1.02, y: -2 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="h-full"
+                  >
+                    <button
+                      onClick={() => handleSelectCategory(category.id)}
+                      className="w-full text-left h-full"
+                    >
+                      <Card
+                        className="bg-slate-800/60 border-slate-700 hover:border-slate-500 transition-all duration-300 h-full"
+                        style={{
+                          minHeight: isMobile ? 'auto' : '160px',
+                          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)'
+                        }}
+                      >
+                        <CardContent className="p-6 h-full flex flex-col">
+                          <div className="flex items-start gap-4 flex-1">
+                            {/* Ícone com padding adequado */}
+                            <div
+                              className="w-14 h-14 rounded-xl flex items-center justify-center flex-shrink-0"
+                              style={{
+                                background: `linear-gradient(135deg, ${category.color}25, ${category.color}08)`,
+                                border: `1.5px solid ${category.color}40`,
+                                boxShadow: `0 4px 12px ${category.color}15`
+                              }}
+                            >
+                              <Icon className="w-7 h-7" style={{ color: category.color }} />
+                            </div>
+
+                            {/* Conteúdo com espaçamento interno adequado */}
+                            <div className="flex-1 min-w-0 flex flex-col">
+                              <h3 className="text-white font-bold text-lg mb-2 leading-tight">
+                                {category.label}
+                              </h3>
+                              <p className="text-slate-400 text-sm leading-relaxed flex-1">
+                                {category.description}
+                              </p>
+                              <Badge
+                                className="mt-4 bg-slate-700/80 text-slate-300 text-xs w-fit"
+                                style={{ padding: '4px 10px' }}
+                              >
+                                {categoryCount} artigo{categoryCount !== 1 ? 's' : ''}
+                              </Badge>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </button>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            LISTA DE FAQs (ACORDEÕES)
+        ═══════════════════════════════════════════════════════════════════ */}
+        {selectedCategory && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+          >
+            {/* Header da Categoria */}
+            <div className="mb-8">
+              <button
+                onClick={handleBackToCategories}
+                className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors mb-4"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Voltar às categorias
+              </button>
+
+              {(() => {
+                const category = HELP_CATEGORIES.find(c => c.id === selectedCategory);
+                const Icon = category?.icon || HelpCircle;
+                return (
+                  <div className="flex items-center gap-4">
+                    <div
+                      className="w-14 h-14 rounded-xl flex items-center justify-center"
+                      style={{
+                        background: `linear-gradient(135deg, ${category?.color}20, ${category?.color}05)`,
+                        border: `1px solid ${category?.color}30`
+                      }}
+                    >
+                      <Icon className="w-7 h-7" style={{ color: category?.color }} />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-bold text-white">
+                        {category?.label}
+                      </h2>
+                      <p className="text-slate-400">
+                        {categoryFaqs.length} pergunta{categoryFaqs.length !== 1 ? 's' : ''} frequente{categoryFaqs.length !== 1 ? 's' : ''}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Lista de FAQs */}
+            {categoryFaqs.length === 0 ? (
+              <Card className="bg-slate-800/50 border-slate-700">
+                <CardContent className="py-12 text-center">
+                  <HelpCircle className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                  <p className="text-slate-400">Nenhuma pergunta nesta categoria ainda</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                {categoryFaqs.map((faq, index) => renderFaqItem(faq, index))}
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            SEÇÃO: AINDA TEM DÚVIDAS? - SUPORTE VIA TELEGRAM
+        ═══════════════════════════════════════════════════════════════════ */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+          className="mt-16"
+        >
+          <Card className="border-slate-700 overflow-hidden" style={{
+            background: 'linear-gradient(135deg, rgba(30, 30, 30, 0.8), rgba(0, 136, 204, 0.15))'
+          }}>
+            <CardContent className={`${isMobile ? 'p-6' : 'p-10'} text-center`}>
+              {/* Ícone do Telegram */}
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-6" style={{
+                background: 'linear-gradient(135deg, rgba(0, 136, 204, 0.25), rgba(0, 136, 204, 0.1))',
+                border: '2px solid rgba(0, 136, 204, 0.4)'
+              }}>
+                <Send className="w-8 h-8 text-[#0088cc]" />
+              </div>
+
+              <h3 className="text-2xl font-bold text-white mb-3">
+                Ainda tem dúvidas?
+              </h3>
+              <p className="text-slate-400 mb-8 max-w-md mx-auto">
+                Fale diretamente com nossa equipe pelo Telegram. Respondemos rapidamente!
+              </p>
+
+              {/* Botão Telegram */}
+              <Button
+                onClick={() => window.open(TELEGRAM_URL, '_blank')}
+                className="text-white px-8 py-6 text-lg font-semibold rounded-xl transition-all duration-300 hover:scale-105"
+                style={{
+                  background: 'linear-gradient(135deg, #0088cc, #0077b5)',
+                  boxShadow: '0 4px 20px rgba(0, 136, 204, 0.3)'
+                }}
+              >
+                <Send className="w-5 h-5 mr-2" />
+                Falar no Telegram
+              </Button>
+
+              <p className="text-xs text-slate-500 mt-4">
+                @{TELEGRAM_USERNAME}
+              </p>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Espaço inferior */}
+        <div className="h-16" />
+      </div>
+    </div>
+  );
+}
