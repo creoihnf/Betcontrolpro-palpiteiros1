@@ -1,0 +1,724 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { base44 } from '@/api/base44Client';
+import { useQuery } from '@tanstack/react-query';
+import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  Search, 
+  Filter, 
+  Download,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  RotateCcw,
+  ChevronLeft,
+  ChevronRight,
+  Calendar as CalendarIcon,
+  Building2,
+  Target,
+  X,
+  FileText,
+  AlertTriangle
+} from 'lucide-react';
+import { format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import { toast } from 'sonner';
+
+const STATUS_CONFIG = {
+  pendente: {
+    icon: Clock,
+    bg: 'bg-blue-900/30',
+    border: 'border-blue-600',
+    text: 'text-blue-300',
+    badge: 'bg-blue-600'
+  },
+  green: {
+    icon: CheckCircle2,
+    bg: 'bg-green-900/30',
+    border: 'border-green-600',
+    text: 'text-green-300',
+    badge: 'bg-green-600'
+  },
+  perda: {
+    icon: XCircle,
+    bg: 'bg-red-900/30',
+    border: 'border-red-600',
+    text: 'text-red-300',
+    badge: 'bg-red-600'
+  },
+  anulada: {
+    icon: RotateCcw,
+    bg: 'bg-gray-900/30',
+    border: 'border-gray-600',
+    text: 'text-gray-300',
+    badge: 'bg-gray-600'
+  },
+  bateu_protecao: {
+    icon: CheckCircle2,
+    bg: 'bg-green-900/30',
+    border: 'border-green-500',
+    badge: 'bg-green-500'
+  },
+  duplo_green: {
+    icon: CheckCircle2,
+    bg: 'bg-green-900/30',
+    border: 'border-green-600',
+    badge: 'bg-green-600'
+  }
+};
+
+const ITEMS_PER_PAGE = 20;
+
+export default function HistoryPage() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [showFilters, setShowFilters] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  
+  const [filters, setFilters] = useState({
+    status: 'all',
+    betType: 'all',
+    bookmakers: [],
+    dateFrom: '',
+    dateTo: '',
+    minOdds: '',
+    maxOdds: ''
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const checkMobile = () => setIsMobile(window.innerWidth < 768);
+      checkMobile();
+      window.addEventListener('resize', checkMobile);
+      return () => window.removeEventListener('resize', checkMobile);
+    }
+  }, []);
+
+  useEffect(() => {
+    const loadUser = async () => {
+      const user = await base44.auth.me();
+      setCurrentUser(user);
+    };
+    loadUser();
+  }, []);
+
+  const { data: allBets = [], isLoading: loadingBets } = useQuery({
+    queryKey: ['history-bets', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser?.email) return [];
+      const data = await base44.entities.Bet.filter({ created_by: currentUser.email });
+      return data || [];
+    },
+    enabled: !!currentUser?.email,
+    staleTime: 60 * 1000,
+    cacheTime: 5 * 60 * 1000
+  });
+
+  const { data: bookmakers = [] } = useQuery({
+    queryKey: ['bookmakers', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser?.email) return [];
+      const data = await base44.entities.Bookmaker.list();
+      return data || [];
+    },
+    enabled: !!currentUser?.email,
+    staleTime: Infinity
+  });
+
+  const filteredBets = useMemo(() => {
+    let result = [...allBets];
+
+    if (searchTerm) {
+      const search = searchTerm.toLowerCase();
+      result = result.filter(bet => 
+        bet.event_name?.toLowerCase().includes(search) ||
+        bet.bookmaker_name?.toLowerCase().includes(search) ||
+        bet.selection?.toLowerCase().includes(search) ||
+        bet.market?.toLowerCase().includes(search)
+      );
+    }
+
+    if (filters.status !== 'all') {
+      result = result.filter(bet => bet.status === filters.status);
+    }
+
+    if (filters.betType !== 'all') {
+      if (filters.betType === 'simples') {
+        result = result.filter(bet => !bet.is_freebet_procedure && (!bet.protection_bookmakers || bet.protection_bookmakers.length === 0));
+      } else if (filters.betType === 'freebet') {
+        result = result.filter(bet => bet.is_freebet_procedure === true);
+      } else if (filters.betType === 'protecao') {
+        result = result.filter(bet => bet.protection_bookmakers && bet.protection_bookmakers.length > 0);
+      }
+    }
+
+    if (filters.bookmakers.length > 0) {
+      result = result.filter(bet => filters.bookmakers.includes(bet.bookmaker_id));
+    }
+
+    if (filters.dateFrom) {
+      result = result.filter(bet => 
+        new Date(bet.event_date || bet.created_date) >= new Date(filters.dateFrom)
+      );
+    }
+    if (filters.dateTo) {
+      result = result.filter(bet => 
+        new Date(bet.event_date || bet.created_date) <= new Date(filters.dateTo)
+      );
+    }
+
+    if (filters.minOdds) {
+      result = result.filter(bet => parseFloat(bet.odds) >= parseFloat(filters.minOdds));
+    }
+    if (filters.maxOdds) {
+      result = result.filter(bet => parseFloat(bet.odds) <= parseFloat(filters.maxOdds));
+    }
+
+    result.sort((a, b) => new Date(b.created_date) - new Date(a.created_date));
+
+    return result;
+  }, [allBets, searchTerm, filters]);
+
+  const paginatedBets = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    const endIndex = startIndex + ITEMS_PER_PAGE;
+    return filteredBets.slice(startIndex, endIndex);
+  }, [filteredBets, currentPage]);
+
+  const totalPages = Math.ceil(filteredBets.length / ITEMS_PER_PAGE);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filters]);
+
+  const handleExportCSV = () => {
+    if (filteredBets.length === 0) {
+      toast.error('❌ Nenhuma aposta para exportar');
+      return;
+    }
+
+    const headers = ['Data', 'Evento', 'Casa', 'Mercado', 'Seleção', 'Odd', 'Stake', 'Status', 'Lucro'];
+
+    const rows = filteredBets.map(bet => {
+      const profit = bet.profit_loss || 0;
+
+      return [
+        format(new Date(bet.event_date || bet.created_date), 'dd/MM/yyyy', { locale: ptBR }),
+        bet.event_name || '',
+        bet.bookmaker_name || '',
+        bet.market || '',
+        bet.selection || '',
+        parseFloat(bet.odds).toFixed(2),
+        parseFloat(bet.stake).toFixed(2),
+        bet.status,
+        profit.toFixed(2)
+      ];
+    });
+
+    const csv = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+    ].join('\n');
+
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `historico_apostas_${format(new Date(), 'yyyy-MM-dd')}.csv`;
+    link.click();
+
+    toast.success('✅ CSV exportado com sucesso!');
+  };
+
+  const handleClearFilters = () => {
+    setFilters({
+      status: 'all',
+      betType: 'all',
+      bookmakers: [],
+      dateFrom: '',
+      dateTo: '',
+      minOdds: '',
+      maxOdds: ''
+    });
+    setSearchTerm('');
+    toast.success('🔄 Filtros limpos');
+  };
+
+  const toggleBookmakerFilter = (bookmakerId) => {
+    setFilters(prev => ({
+      ...prev,
+      bookmakers: prev.bookmakers.includes(bookmakerId)
+        ? prev.bookmakers.filter(id => id !== bookmakerId)
+        : [...prev.bookmakers, bookmakerId]
+    }));
+  };
+
+  const activeFiltersCount = [
+    filters.status !== 'all' ? 1 : 0,
+    filters.betType !== 'all' ? 1 : 0,
+    filters.bookmakers.length,
+    filters.dateFrom ? 1 : 0,
+    filters.dateTo ? 1 : 0,
+    filters.minOdds ? 1 : 0,
+    filters.maxOdds ? 1 : 0
+  ].reduce((a, b) => a + b, 0);
+
+  if (!currentUser || loadingBets) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#0a0a0a', padding: isMobile ? '16px' : '32px' }}>
+        <div style={{ maxWidth: '1400px', margin: '0 auto' }} className="space-y-6">
+          <Skeleton className="h-32 bg-slate-800 rounded-xl" />
+          <Skeleton className="h-20 bg-slate-800 rounded-xl" />
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[1, 2, 3, 4, 5, 6].map(i => (
+              <Skeleton key={i} className="h-64 bg-slate-800 rounded-xl" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ 
+      width: '100%', 
+      minHeight: '100vh', 
+      padding: isMobile ? '16px 12px' : '24px 32px', 
+      background: '#0a0a0a' 
+    }}>
+      <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+        
+        <motion.div 
+          style={{ marginBottom: '32px' }}
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '16px'
+          }}>
+            <div>
+              <h1 style={{
+                fontSize: isMobile ? '24px' : '32px',
+                fontWeight: 900,
+                letterSpacing: '-1px',
+                color: '#ffffff',
+                marginBottom: '8px'
+              }}>
+                📜 Histórico de Apostas
+              </h1>
+              <p style={{ 
+                color: 'rgba(176, 176, 176, 0.8)', 
+                fontSize: isMobile ? '12px' : '14px', 
+                fontWeight: 500 
+              }}>
+                {filteredBets.length} aposta{filteredBets.length !== 1 ? 's' : ''} encontrada{filteredBets.length !== 1 ? 's' : ''}
+              </p>
+            </div>
+            <Button
+              onClick={handleExportCSV}
+              disabled={filteredBets.length === 0}
+              size={isMobile ? 'sm' : 'default'}
+              className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              {isMobile ? 'CSV' : 'Exportar CSV'}
+            </Button>
+          </div>
+        </motion.div>
+
+        <motion.div
+          style={{ marginBottom: '24px' }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+        >
+          <Card className="bg-slate-800/50 border-slate-700">
+            <CardContent className="p-6">
+              <div className="flex gap-3 mb-4">
+                <div className="flex-1 relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <Input
+                    placeholder="Buscar por evento, casa, mercado..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-12 bg-slate-900 border-slate-700 text-white h-12"
+                  />
+                  {searchTerm && (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => setSearchTerm('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2"
+                    >
+                      <X className="w-4 h-4 text-slate-400" />
+                    </Button>
+                  )}
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={`border-slate-700 ${showFilters ? 'bg-slate-700' : ''}`}
+                >
+                  <Filter className="w-4 h-4 mr-2" />
+                  Filtros
+                  {activeFiltersCount > 0 && (
+                    <Badge className="ml-2 bg-blue-600">{activeFiltersCount}</Badge>
+                  )}
+                </Button>
+              </div>
+
+              <AnimatePresence>
+                {showFilters && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="border-t border-slate-700 pt-4 space-y-4"
+                  >
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-slate-300 text-sm font-semibold mb-2">
+                          Status
+                        </label>
+                        <select
+                          value={filters.status}
+                          onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                        >
+                          <option value="all">Todos</option>
+                          <option value="pendente">Pendente</option>
+                          <option value="green">Green</option>
+                          <option value="perda">Perda</option>
+                          <option value="bateu_protecao">Bateu Proteção</option>
+                          <option value="duplo_green">Duplo Green</option>
+                          <option value="anulada">Anulada</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-300 text-sm font-semibold mb-2">
+                          Tipo de Aposta
+                        </label>
+                        <select
+                          value={filters.betType}
+                          onChange={(e) => setFilters({ ...filters, betType: e.target.value })}
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                        >
+                          <option value="all">Todos</option>
+                          <option value="simples">Simples</option>
+                          <option value="protecao">Com Proteção</option>
+                          <option value="freebet">Freebet</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-300 text-sm font-semibold mb-2">
+                          Odds (Mín - Máx)
+                        </label>
+                        <div className="flex gap-2">
+                          <Input
+                            type="number"
+                            step="0.1"
+                            placeholder="Mín"
+                            value={filters.minOdds}
+                            onChange={(e) => setFilters({ ...filters, minOdds: e.target.value })}
+                            className="bg-slate-900 border-slate-700 text-white"
+                          />
+                          <Input
+                            type="number"
+                            step="0.1"
+                            placeholder="Máx"
+                            value={filters.maxOdds}
+                            onChange={(e) => setFilters({ ...filters, maxOdds: e.target.value })}
+                            className="bg-slate-900 border-slate-700 text-white"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-300 text-sm font-semibold mb-2">
+                          Data (De - Até)
+                        </label>
+                        <div className="flex gap-2">
+                          <Input
+                            type="date"
+                            value={filters.dateFrom}
+                            onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })}
+                            className="bg-slate-900 border-slate-700 text-white"
+                          />
+                          <Input
+                            type="date"
+                            value={filters.dateTo}
+                            onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })}
+                            className="bg-slate-900 border-slate-700 text-white"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {bookmakers.length > 0 && (
+                      <div>
+                        <label className="block text-slate-300 text-sm font-semibold mb-2">
+                          Casas de Apostas ({filters.bookmakers.length} selecionada{filters.bookmakers.length !== 1 ? 's' : ''})
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {bookmakers.slice(0, 15).map(bookmaker => (
+                            <Button
+                              key={bookmaker.id}
+                              size="sm"
+                              variant="outline"
+                              onClick={() => toggleBookmakerFilter(bookmaker.id)}
+                              className={`${
+                                filters.bookmakers.includes(bookmaker.id)
+                                  ? 'bg-blue-600 border-blue-600 text-white'
+                                  : 'border-slate-700 text-slate-300'
+                              }`}
+                            >
+                              {bookmaker.name}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex justify-end gap-2 pt-3 border-t border-slate-700">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleClearFilters}
+                        className="border-slate-700 text-slate-300"
+                      >
+                        <X className="w-4 h-4 mr-2" />
+                        Limpar Filtros
+                      </Button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        <AnimatePresence mode="wait">
+          {paginatedBets.length === 0 ? (
+            <motion.div
+              key="empty"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+            >
+              <Card className="bg-slate-800/50 border-slate-700">
+                <CardContent className="p-12 text-center">
+                  <Search className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+                  <h3 className="text-xl font-bold mb-2 text-white">
+                    Nenhuma aposta encontrada
+                  </h3>
+                  <p className="text-slate-400 mb-4">
+                    {searchTerm || activeFiltersCount > 0 
+                      ? 'Tente ajustar os filtros ou busca' 
+                      : 'Você ainda não tem apostas registradas'}
+                  </p>
+                  {(searchTerm || activeFiltersCount > 0) && (
+                    <Button onClick={handleClearFilters} variant="outline">
+                      Limpar Filtros
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="list"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(350px, 1fr))',
+                gap: isMobile ? '16px' : '24px',
+                marginBottom: '32px'
+              }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              {paginatedBets.map((bet, index) => {
+                const statusConfig = STATUS_CONFIG[bet.status] || STATUS_CONFIG.pendente;
+                const StatusIcon = statusConfig.icon;
+                const profit = bet.profit_loss || 0;
+
+                return (
+                  <motion.div
+                    key={bet.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -20 }}
+                    transition={{ delay: index * 0.05 }}
+                    whileHover={{ scale: isMobile ? 1 : 1.02 }}
+                  >
+                    <Card className={`${statusConfig.bg} border-2 ${statusConfig.border} hover:shadow-xl transition-all`}>
+                      <CardHeader className="pb-3" style={{ padding: isMobile ? '12px' : '16px' }}>
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0">
+                            <h3 className="text-white font-bold text-lg truncate mb-1">
+                              {bet.event_name}
+                            </h3>
+                            <p className="text-slate-400 text-sm truncate">
+                              {bet.selection || bet.market}
+                            </p>
+                          </div>
+                          <div className="flex-shrink-0 ml-3">
+                            <div className={`w-10 h-10 rounded-full ${statusConfig.badge} flex items-center justify-center shadow-lg`}>
+                              <StatusIcon className="w-5 h-5 text-white" />
+                            </div>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-3" style={{ padding: isMobile ? '0 12px 12px' : '0 16px 16px' }}>
+                        <div className="grid grid-cols-2 gap-3 text-sm">
+                          <div>
+                            <p className="text-slate-400 mb-1 text-xs">Casa</p>
+                            <div className="flex items-center gap-2">
+                              <Building2 className="w-4 h-4 text-slate-400" />
+                              <p className="text-white font-semibold truncate text-sm">
+                                {bet.bookmaker_name}
+                              </p>
+                            </div>
+                          </div>
+                          <div>
+                            <p className="text-slate-400 mb-1 text-xs">Mercado</p>
+                            <div className="flex items-center gap-2">
+                              <Target className="w-4 h-4 text-slate-400" />
+                              <p className="text-white font-semibold truncate text-sm">
+                                {bet.market || 'N/A'}
+                              </p>
+                            </div>
+                          </div>
+                          <div>
+                            <p className="text-slate-400 mb-1 text-xs">Odd</p>
+                            <p className="text-blue-400 font-mono font-bold text-lg">
+                              {parseFloat(bet.odds).toFixed(2)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-slate-400 mb-1 text-xs">Stake</p>
+                            <p className="text-white font-mono font-bold text-lg">
+                              R$ {parseFloat(bet.stake).toFixed(2)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="border-t border-slate-700/50" />
+
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-slate-400 text-xs mb-1">Data</p>
+                            <p className="text-white text-sm font-semibold">
+                              {format(new Date(bet.event_date || bet.created_date), 'dd MMM yyyy', { locale: ptBR })}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-slate-400 text-xs mb-1">
+                              {profit >= 0 ? 'Lucro' : 'Prejuízo'}
+                            </p>
+                            <p className={`font-mono font-bold text-xl ${
+                              profit > 0 ? 'text-green-400' :
+                              profit < 0 ? 'text-red-400' :
+                              'text-slate-400'
+                            }`}>
+                              {profit > 0 && '+'}R$ {profit.toFixed(2)}
+                            </p>
+                          </div>
+                        </div>
+
+                        {bet.protection_bookmakers && bet.protection_bookmakers.length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-slate-700/50">
+                            <Badge className="bg-purple-600 text-white text-xs">
+                              🛡️ {bet.protection_bookmakers.length} Proteção{bet.protection_bookmakers.length > 1 ? 'ões' : 'ão'}
+                            </Badge>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                );
+              })}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {totalPages > 1 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex items-center justify-center gap-2 mt-8"
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+              className="border-slate-700 text-slate-300"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              {!isMobile && 'Anterior'}
+            </Button>
+
+            <div className="flex gap-2">
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pageNum;
+                if (totalPages <= 5) {
+                  pageNum = i + 1;
+                } else if (currentPage <= 3) {
+                  pageNum = i + 1;
+                } else if (currentPage >= totalPages - 2) {
+                  pageNum = totalPages - 4 + i;
+                } else {
+                  pageNum = currentPage - 2 + i;
+                }
+
+                return (
+                  <Button
+                    key={pageNum}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(pageNum)}
+                    className={`${
+                      currentPage === pageNum
+                        ? 'bg-blue-600 border-blue-600 text-white'
+                        : 'border-slate-700 text-slate-300'
+                    } ${isMobile ? 'min-w-[36px]' : ''}`}
+                  >
+                    {pageNum}
+                  </Button>
+                );
+              })}
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+              className="border-slate-700 text-slate-300"
+            >
+              {!isMobile && 'Próximo'}
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </motion.div>
+        )}
+
+        {totalPages > 1 && (
+          <p className="text-center text-slate-500 text-sm mt-4">
+            Página {currentPage} de {totalPages} • {filteredBets.length} aposta{filteredBets.length !== 1 ? 's' : ''} total
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
