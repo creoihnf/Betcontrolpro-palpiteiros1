@@ -1,0 +1,1093 @@
+
+import React, { useState, useEffect } from "react";
+import { Bet } from "@/entities/Bet";
+import { Profile } from "@/entities/Profile";
+import { Bookmaker } from "@/entities/Bookmaker";
+import { Wallet } from "@/entities/Wallet";
+import { Promotion } from "@/entities/Promotion";
+import { User } from "@/entities/User";
+import { UserSubscription } from "@/entities/UserSubscription";
+import { canAccessFeature, getUserPlan } from "@/components/utils/subscriptionPlans";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { ArrowLeft, Save, Calculator, Loader2, Gift, Target, Sparkles, Calendar, DollarSign } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useToast } from "@/components/ui/use-toast";
+import { toast } from "sonner";
+
+import BookmakerAutocomplete from "../components/bets/BookmakerAutocomplete";
+import ProtectionBookmakers from "../components/bets/ProtectionBookmakers";
+import MatchSearchAutocomplete from "../components/bets/MatchSearchAutocomplete";
+import AccountSelector from "../components/bets/AccountSelector";
+import AdditionalBets from "../components/bets/AdditionalBets";
+import AIPhotoUpload from "../components/bets/AIPhotoUpload";
+
+const STORAGE_KEY = 'addfreebet_form_data';
+
+export default function AddFreebetBetPage() {
+  const navigate = useNavigate();
+  const { toast: toastHook } = useToast();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const [bookmakers, setBookmakers] = useState([]);
+  const [wallets, setWallets] = useState([]);
+  const [profiles, setProfiles] = useState([]);
+
+  const [extractedImageUrl, setExtractedImageUrl] = useState(null);
+  const [extractedRawData, setExtractedRawData] = useState(null);
+  const [showImageFeedback, setShowImageFeedback] = useState(false);
+
+  // showPromotionFields state removed as its logic is now integrated into formData and derived state
+
+  const getInitialSavedState = () => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar dados salvos:', error);
+    }
+    return {};
+  };
+
+  const initialSavedState = getInitialSavedState();
+
+  const [formData, setFormData] = useState(initialSavedState.formData || {
+    event_name: '',
+    sport: 'futebol',
+    event_date: '',
+    bookmaker_id: null,
+    additional_bets: [],
+    protection_bookmakers: [],
+    profit_origin_id: null,
+    procedure_type: 'extracao_freebet', // Changed default from 'procedimento_freebet'
+    procedure_loss: 0,
+    market: '',
+    selection: '',
+    stake: '',
+    odds: '',
+    bet_type: 'normal',
+    is_multiple: false,
+    status: 'pendente',
+    bet_url: '',
+    notes: '',
+    notifications_enabled: false,
+    include_main_account: true,
+    selected_third_party_profiles: [],
+    result: '',
+    profit_loss: null, // Changed from 0 to null for manual input distinction
+    is_freebet: true, // Default to true as procedure_type is extracao_freebet
+    // New fields for promotion data, now integrated into formData
+    freebet_value: '', // Value of the freebet itself (reward)
+    freebet_expiry_date: '', // Expiry date of the freebet promotion
+    needs_manual_activation: false, // If the freebet needs manual activation
+    activation_instructions: '', // Instructions for manual activation
+    where_hit: 'principal', // New field, not strictly used in this logic but added per outline
+    settlement_date: null, // New field for manual settlement date
+  });
+
+  const [surebetResults, setSurebetResults] = useState(null);
+
+  const [showAIUpload, setShowAIUpload] = useState(false);
+  const [hasUltraFeatures, setHasUltraFeatures] = useState(false);
+
+  // Derived state for convenience
+  const isProcedimentoFreebet = formData.procedure_type === 'procedimento_freebet';
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        formData
+      }));
+    } catch (error) {
+      console.error('Erro ao salvar dados:', error);
+    }
+  }, [formData]);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const eventName = urlParams.get('event_name');
+    const eventDate = urlParams.get('event_date');
+    const sport = urlParams.get('sport');
+
+    if ((eventName || eventDate || sport) && !formData.event_name) {
+      setFormData((prev) => ({
+        ...prev,
+        ...(eventName && { event_name: eventName }),
+        ...(eventDate && { event_date: eventDate }),
+        ...(sport && { sport: sport })
+      }));
+    }
+
+    checkUltraFeatures();
+    loadData();
+  }, []);
+
+  // NOVO: Carregar dados da calculadora
+  useEffect(() => {
+    const savedCalc = localStorage.getItem('freebet_calculator_data');
+    if (savedCalc) {
+      try {
+        const calcData = JSON.parse(savedCalc);
+        
+        setFormData((prev) => ({
+          ...prev,
+          freebet_value: calcData.freebet_value !== undefined ? calcData.freebet_value : prev.freebet_value,
+          stake: calcData.stake !== undefined ? calcData.stake : prev.stake,
+          odds: calcData.odds !== undefined ? calcData.odds : prev.odds,
+          protection_bookmakers: calcData.protection_bookmakers || prev.protection_bookmakers
+        }));
+
+        toast.success('Dados da calculadora carregados!', {
+          description: 'Revise e complete as informações restantes'
+        });
+
+        // Limpar dados após carregar
+        localStorage.removeItem('freebet_calculator_data');
+      } catch (error) {
+        console.error('Erro ao carregar dados da calculadora:', error);
+      }
+    }
+  }, []);
+
+  const checkUltraFeatures = async () => {
+    try {
+      const user = await User.me();
+      const subscriptions = await UserSubscription.filter({ created_by: user.email });
+      const activeSubscription = subscriptions.find((s) => s.status === 'active');
+      const userPlan = getUserPlan(activeSubscription);
+      setHasUltraFeatures(canAccessFeature(userPlan, 'ai_integration'));
+    } catch (error) {
+      console.error('Erro ao verificar plano:', error);
+    }
+  };
+
+  const loadData = async () => {
+    try {
+      const [bookmakersData, walletsData, profilesData] = await Promise.all([
+        Bookmaker.list(),
+        Wallet.list(),
+        Profile.list()
+      ]);
+      setBookmakers(bookmakersData);
+      setWallets(walletsData);
+      setProfiles(profilesData.filter((p) => p.is_active));
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error);
+      toast.error('Não foi possível carregar as listas de casas de apostas, carteiras e perfis.');
+    }
+  };
+
+  const handleInputChange = (field, value) => {
+    setFormData((prev) => {
+      const newState = { ...prev, [field]: value };
+      // CRITICAL: Update is_freebet based on procedure_type
+      if (field === 'procedure_type') {
+        newState.is_freebet = value !== 'procedimento_freebet';
+      }
+      return newState;
+    });
+    setError(null);
+    if (['stake', 'odds', 'protection_bookmakers', 'additional_bets', 'procedure_type', 'procedure_loss'].includes(field)) {
+      setSurebetResults(null);
+    }
+  };
+
+  const handleMatchSelect = (match) => {
+    const eventDate = match.event_date ? new Date(match.event_date).toISOString().slice(0, 16) : '';
+    
+    setFormData((prev) => ({
+      ...prev,
+      event_name: match.event_name,
+      event_date: eventDate,
+      sport: match.sport || 'futebol'
+    }));
+  };
+
+  const handleAIDataExtracted = (aiData) => {
+    setFormData((prev) => ({
+      ...prev,
+      event_name: aiData.event_name || prev.event_name,
+      sport: aiData.sport || prev.sport,
+      event_date: aiData.event_date || prev.event_date,
+      bookmaker_id: aiData.bookmaker_id || prev.bookmaker_id,
+      market: aiData.market || prev.market,
+      selection: aiData.selection || prev.selection,
+      stake: aiData.stake || prev.stake,
+      odds: aiData.odds || prev.odds,
+      bet_type: aiData.bet_type || prev.bet_type,
+      is_multiple: aiData.is_multiple ?? prev.is_multiple,
+      notes: aiData.notes || prev.notes,
+      is_freebet: aiData.is_freebet ?? prev.is_freebet, // AI might provide this
+      freebet_value: aiData.freebet_value || prev.freebet_value, // AI might provide this
+      freebet_expiry_date: aiData.freebet_expiry_date || prev.freebet_expiry_date, // AI might provide this
+      needs_manual_activation: aiData.needs_manual_activation ?? prev.needs_manual_activation, // AI might provide this
+      activation_instructions: aiData.activation_instructions || prev.activation_instructions // AI might provide this
+    }));
+
+    if (aiData.image_url) {
+      setExtractedImageUrl(aiData.image_url);
+    }
+
+    toast.success('Dados extraídos com sucesso! Revise antes de salvar.');
+    setShowAIUpload(false);
+  };
+
+  const calculatePotentialProfit = () => {
+    const stake = parseFloat(formData.stake) || 0;
+    const odds = parseFloat(formData.odds) || 0;
+    const procedureLoss = parseFloat(formData.procedure_loss) || 0;
+
+    // A bet with 0 stake or 0 odds won't yield profit for calculation,
+    // but a freebet with 0 stake can still yield profit if odds > 1.
+    // However, if stake is 0, the return will be 0. So stake > 0 is essential.
+    // If it's a freebet, the 'stake' is the value of the freebet being used.
+    // If it's a real money bet, the 'stake' is the money invested.
+    // So stake > 0 is still critical for a meaningful return.
+    if (stake <= 0 || odds <= 0) {
+      return '0.00';
+    }
+
+    const totalProtectionStake = (formData.protection_bookmakers || []).reduce((sum, p) => {
+      return sum + (parseFloat(p.stake) || 0);
+    }, 0);
+
+    // Sum of stakes for additional bets (investment)
+    const totalAdditionalInvestment = (formData.additional_bets || []).reduce((sum, a) => {
+      return sum + (parseFloat(a.stake) || 0);
+    }, 0);
+
+    const numAccounts = (formData.include_main_account ? 1 : 0) + formData.selected_third_party_profiles.length;
+
+    if (numAccounts === 0) {
+      return '0.00';
+    }
+
+    // Investment for the main bet depends on whether it's a real money bet (is_freebet: false) or a freebet (is_freebet: true)
+    const mainBetInvestment = formData.is_freebet ? 0 : stake * numAccounts;
+
+    // Total investment for the whole process (all real money outlays)
+    const totalInvested = mainBetInvestment + totalProtectionStake + totalAdditionalInvestment + procedureLoss * numAccounts;
+
+    // Return from the main bet
+    // If it's a freebet, profit is (odds - 1) * stake. If real money, it's odds * stake.
+    const mainBetReturn = formData.is_freebet ? stake * (odds - 1) * numAccounts : stake * odds * numAccounts;
+
+    const additionalReturn = (formData.additional_bets || []).reduce((sum, a) => {
+      return sum + (parseFloat(a.stake) || 0) * (parseFloat(a.odds) || 0);
+    }, 0);
+
+    const totalReturn = mainBetReturn + additionalReturn;
+
+    const netProfit = totalReturn - totalInvested;
+
+    return netProfit.toFixed(2);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+
+    // Removed validation for formData.event_name and formData.event_date to make them optional
+
+    if (!formData.include_main_account && formData.selected_third_party_profiles.length === 0) {
+      setError('Selecione pelo menos uma conta (principal ou de terceiro).');
+      toast.error('Você precisa selecionar em quais contas pegou a aposta.');
+      return;
+    }
+
+    // Promotion specific validations (removed original validation as per outline)
+    // The previous validation for freebet_value is removed because it can now be derived from stake.
+
+    setIsSubmitting(true);
+
+    const stake = parseFloat(formData.stake) || 0;
+    const odds = parseFloat(formData.odds) || 0;
+    const procedureLoss = parseFloat(formData.procedure_loss) || 0;
+
+    const potentialNetProfit = parseFloat(calculatePotentialProfit());
+
+    // 'superodd', 'extracao_freebet', 'chance_duplo', 'procedimento_freebet', 'giros_gratis'
+    const isArbitrageOrValue = ['superodd', 'extracao_freebet', 'giros_gratis', 'procedimento_freebet', 'chance_duplo'].includes(formData.procedure_type);
+    const finalStatus = isArbitrageOrValue ? 'green' : formData.status;
+
+    let finalProfitLossPerAccount = 0;
+    let settlementDate = formData.settlement_date || null; // Use manual settlement_date if provided
+
+    // If a manual profit_loss is provided, and it's positive, use it directly
+    // This implies the bet is already settled/extracted.
+    if (formData.profit_loss > 0 && finalStatus === 'green' && formData.procedure_type === 'extracao_freebet') {
+        const numAccounts = (formData.include_main_account ? 1 : 0) + formData.selected_third_party_profiles.length;
+        if (numAccounts > 0) {
+            finalProfitLossPerAccount = formData.profit_loss / numAccounts;
+        } else { // If no accounts selected, apply to one implicit account
+            finalProfitLossPerAccount = formData.profit_loss;
+        }
+        if (!settlementDate) { // If manual profit but no manual date, set to now
+            settlementDate = new Date().toISOString();
+        }
+    } else if (isArbitrageOrValue && finalStatus === 'green') {
+      // Original logic for auto-calculated profit
+      const numAccounts = (formData.include_main_account ? 1 : 0) + formData.selected_third_party_profiles.length;
+      if (numAccounts > 0) {
+        finalProfitLossPerAccount = potentialNetProfit / numAccounts;
+      }
+      if (!settlementDate) { // Only set if not already set by manual input
+        settlementDate = new Date().toISOString();
+      }
+    }
+
+
+    const baseBetData = {
+      event_name: formData.event_name,
+      sport: formData.sport,
+      event_date: formData.event_date,
+      bookmaker_id: formData.bookmaker_id,
+      profit_origin_id: formData.profit_origin_id,
+      procedure_type: formData.procedure_type,
+      procedure_loss: procedureLoss,
+      market: formData.market,
+      selection: formData.selection,
+      stake: stake || undefined,
+      odds: odds || undefined,
+      bet_type: formData.bet_type,
+      is_multiple: formData.is_multiple,
+      status: finalStatus,
+      bet_url: formData.bet_url,
+      notes: formData.notes,
+      notifications_enabled: formData.notifications_enabled,
+      additional_bets: formData.additional_bets.map((a) => ({
+        ...a,
+        stake: a.stake ? parseFloat(a.stake) : 0,
+        odds: a.odds ? parseFloat(a.odds) : 0
+      })),
+      protection_bookmakers: formData.protection_bookmakers.map((p) => ({
+        ...p,
+        stake: p.stake ? parseFloat(p.stake) : 0,
+        odds: p.odds ? parseFloat(p.odds) : 0
+      })),
+      profit_loss: finalProfitLossPerAccount,
+      potential_net_profit: potentialNetProfit,
+      settlement_date: settlementDate,
+      result: formData.result,
+      is_freebet: formData.is_freebet // CRITICAL: Use formData.is_freebet here
+    };
+
+    if (extractedImageUrl) {
+      baseBetData.image_url = extractedImageUrl;
+    }
+
+    try {
+      const betsToCreate = [];
+      const walletsToUpdate = [];
+
+      if (formData.include_main_account) {
+        const mainWallet = wallets.find((w) => w.is_main_account && w.is_active);
+        if (mainWallet && formData.bookmaker_id) {
+          if (!mainWallet.bookmaker_ids || !mainWallet.bookmaker_ids.includes(formData.bookmaker_id)) {
+            walletsToUpdate.push({
+              id: mainWallet.id,
+              bookmaker_ids: [...(mainWallet.bookmaker_ids || []), formData.bookmaker_id],
+              bookmaker_status: {
+                ...(mainWallet.bookmaker_status || {}),
+                [formData.bookmaker_id]: 'ativa'
+              },
+              bookmaker_balances: {
+                ...(mainWallet.bookmaker_balances || {}),
+                [formData.bookmaker_id]: 0
+              }
+            });
+          }
+        }
+
+        betsToCreate.push({
+          ...baseBetData,
+          profile_id: null,
+          wallet_id: mainWallet?.id || null
+        });
+      }
+
+      formData.selected_third_party_profiles.forEach((profileId) => {
+        const profileWallets = wallets.filter((w) => w.profile_id === profileId && w.is_active);
+
+        if (profileWallets.length > 0 && formData.bookmaker_id) {
+          profileWallets.forEach((wallet) => {
+            if (!wallet.bookmaker_ids || !wallet.bookmaker_ids.includes(formData.bookmaker_id)) {
+              walletsToUpdate.push({
+                id: wallet.id,
+                bookmaker_ids: [...(wallet.bookmaker_ids || []), formData.bookmaker_id],
+                bookmaker_status: {
+                  ...(wallet.bookmaker_status || {}),
+                  [formData.bookmaker_id]: 'ativa'
+                },
+                bookmaker_balances: {
+                  ...(wallet.bookmaker_balances || {}),
+                  [formData.bookmaker_id]: 0
+                }
+              });
+            }
+          });
+        }
+
+        betsToCreate.push({
+          ...baseBetData,
+          profile_id: profileId,
+          wallet_id: profileWallets[0]?.id || null
+        });
+      });
+
+      const createdBets = await Promise.all(betsToCreate.map((bet) => Bet.create(bet)));
+      await Promise.all(walletsToUpdate.map((update) => Wallet.update(update.id, {
+        bookmaker_ids: update.bookmaker_ids,
+        bookmaker_status: update.bookmaker_status,
+        bookmaker_balances: update.bookmaker_balances
+      })));
+      const firstBetId = createdBets.length > 0 ? createdBets[0].id : null;
+
+      let betsSuccessMessage = `${createdBets.length} ${createdBets.length === 1 ? 'aposta adicionada' : 'apostas adicionadas'} com sucesso.`;
+      if (walletsToUpdate.length > 0) {
+        betsSuccessMessage += ' Casas vinculadas automaticamente.';
+      }
+      toast.success(betsSuccessMessage);
+
+      // CRITICAL: Criar promoção SEMPRE que houver bookmaker_id, com os dados EXATOS do usuário
+      if (formData.bookmaker_id) {
+        try {
+          const freebetValue = parseFloat(formData.freebet_value) || 0;
+          const expiresAt = formData.freebet_expiry_date || '';
+          const isExtraction = formData.procedure_type === 'extracao_freebet';
+          const isProcedimento = formData.procedure_type === 'procedimento_freebet';
+
+          // Se não preencheu valor da freebet, usar o stake como fallback
+          const finalFreebetValue = freebetValue > 0 ? freebetValue : stake;
+
+          // Determinar status de extração
+          let extractionStatus = 'pendente';
+          let extractedAt = null;
+
+          if (isExtraction) {
+            extractionStatus = 'extraida';
+            extractedAt = new Date().toISOString();
+          }
+
+          const defaultEndDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+          await Promotion.create({
+            title: formData.event_name ? `Freebet - ${formData.event_name}` : `Freebet - ${bookmakers.find(b => b.id === formData.bookmaker_id)?.name || 'Casa'}`,
+            bookmaker_id: formData.bookmaker_id,
+            wallet_ids: [], // Assuming promotions are not tied to specific wallets in this context
+            description: isExtraction
+              ? `✅ Freebet EXTRAÍDA com sucesso${formData.event_name ? ` em ${formData.event_name}` : ''}`
+              : isProcedimento
+                ? `🎯 Procedimento para ganhar freebet${formData.event_name ? ` - ${formData.event_name}` : ''}`
+                : `Freebet conquistada${formData.event_name ? ` através de ${formData.event_name}` : ''}`,
+            type: 'freebet',
+            required_stake: isProcedimento ? stake : 0, // Required stake is the real money bet if 'procedimento', else 0
+            reward_value: finalFreebetValue,
+            start_date: new Date().toISOString().split('T')[0],
+            end_date: expiresAt || defaultEndDate,
+            terms: formData.needs_manual_activation
+              ? `Ativação necessária: ${formData.activation_instructions || 'Verificar site da casa'}`
+              : 'Freebet creditada automaticamente',
+            is_active: !isExtraction, // If already extracted, mark as inactive
+            priority: isExtraction ? 'low' : 'high',
+            needs_activation: formData.needs_manual_activation,
+            activation_instructions: formData.activation_instructions,
+            extraction_status: extractionStatus,
+            extracted_at: extractedAt,
+            related_bet_id: firstBetId
+          });
+
+          toast.success(isExtraction ? '✅ Freebet extraída e promoção registrada!' : '🎁 Promoção de freebet criada!');
+        } catch (promoError) {
+          console.error('Erro ao criar promoção:', promoError);
+          toast.error('Apostas criadas, mas erro ao criar promoção');
+        }
+      }
+
+      localStorage.removeItem(STORAGE_KEY);
+      setExtractedImageUrl(null);
+      setExtractedRawData(null);
+      setShowImageFeedback(false);
+
+      navigate(createPageUrl("bets"));
+    } catch (err) {
+      console.error("Failed to create bets:", err);
+      setError("Erro ao adicionar as apostas. Por favor, tente novamente.");
+      toast.error('Erro ao adicionar as apostas. Tente novamente.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="bg-slate-900 p-4 w-full h-full min-h-screen md:p-8">
+      <div className="w-full h-full">
+        <div className="flex items-center gap-4 mb-8">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => navigate(createPageUrl("bets"))}
+            className="shadow-sm bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700">
+            <ArrowLeft className="w-5 h-5" />
+          </Button>
+          <div className="flex-1">
+            <h1 className="text-3xl md:text-4xl font-bold text-white">Nova Freebet</h1>
+            <p className="text-purple-400 mt-1 flex items-center gap-2">
+              <Gift className="w-4 h-4" />
+              💎 Extração de Freebet
+            </p>
+          </div>
+
+          {hasUltraFeatures &&
+            <Button
+              onClick={() => setShowAIUpload(!showAIUpload)}
+              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg text-white font-semibold">
+
+              <Sparkles className="w-5 h-5 mr-2" />
+              {showAIUpload ? 'Ocultar Upload IA' : 'Upload com IA'}
+            </Button>
+          }
+        </div>
+
+        {error &&
+          <Alert variant="destructive" className="mb-6 bg-red-900/20 border-red-700">
+            <AlertDescription className="text-red-200">{error}</AlertDescription>
+          </Alert>
+        }
+
+        {hasUltraFeatures && showAIUpload &&
+          <div className="mb-6">
+            <AIPhotoUpload
+              onDataExtracted={handleAIDataExtracted}
+              disabled={isSubmitting} />
+
+          </div>
+        }
+
+        {/* The "Modo Freebet Ativo" block's description is primarily for when the main stake is a freebet.
+           While this page also handles 'procedimento_freebet' where the main stake is real money,
+           the individual input labels and profit calculation will provide clarity for that specific case. */}
+        <div className="mb-6 p-4 bg-purple-900/20 border-2 border-purple-700 rounded-xl">
+          <div className="flex items-center gap-3">
+            <Gift className="w-8 h-8 text-purple-400" />
+            <div>
+              <h3 className="font-bold text-white text-lg">Modo Freebet Ativo</h3>
+              <p className="text-sm text-purple-300">
+                O stake não será contado como investimento real para freebets. Apenas o lucro líquido será calculado.
+              </p>
+              <p className="text-xs text-purple-400 mt-1">
+                Exemplo: R$ 50 na odd 10.00 (freebet) = Lucro de R$ 450 (não R$ 500)
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Informações do Evento */}
+          <Card className="border-0 shadow-2xl bg-slate-800 border-slate-700">
+            <CardHeader className="border-b border-slate-700">
+              <CardTitle className="text-xl font-bold text-white flex items-center gap-2">
+                <Calendar className="w-6 h-6 text-blue-400" />
+                Informações do Evento
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="md:col-span-2">
+                  <MatchSearchAutocomplete
+                    value={formData.event_name}
+                    onChange={(value) => handleInputChange('event_name', value)}
+                    onMatchSelect={handleMatchSelect}
+                  />
+                  <p className="text-xs text-slate-400 mt-1">
+                    💡 Dica: Digite o nome do time e selecione o jogo
+                  </p>
+                </div>
+
+                <div>
+                  <Label htmlFor="sport" className="text-purple-200 font-semibold">
+                    Esporte
+                  </Label>
+                  <Select
+                    value={formData.sport}
+                    onValueChange={(value) => setFormData((prev) => ({ ...prev, sport: value }))}>
+
+                    <SelectTrigger className="mt-2 bg-purple-900/30 border-purple-700 text-white h-12">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700">
+                      <SelectItem value="futebol" className="text-white">⚽ Futebol</SelectItem>
+                      <SelectItem value="basquete" className="text-white">🏀 Basquete</SelectItem>
+                      <SelectItem value="tenis" className="text-white">🎾 Tênis</SelectItem>
+                      <SelectItem value="volei" className="text-white">🏐 Vôlei</SelectItem>
+                      <SelectItem value="mma" className="text-white">🥊 MMA</SelectItem>
+                      <SelectItem value="esports" className="text-white">🎮 E-Sports</SelectItem>
+                      <SelectItem value="outro" className="text-white">🎯 Outro</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label htmlFor="event_date" className="text-purple-200 font-semibold">
+                    Data e Hora do Evento
+                  </Label>
+                  <Input
+                    id="event_date"
+                    type="datetime-local"
+                    value={formData.event_date}
+                    onChange={(e) => handleInputChange('event_date', e.target.value)}
+                    className="mt-2 bg-purple-900/30 border-purple-700 text-white h-12" />
+
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-0 shadow-2xl bg-gradient-to-br from-purple-800/50 to-slate-800 border-purple-700">
+            <CardHeader className="border-b border-purple-700/50">
+              <CardTitle className="text-xl font-bold text-white flex items-center gap-2">
+                <Target className="w-6 h-6 text-purple-400" />
+                Detalhes da Aposta Freebet
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <BookmakerAutocomplete
+                  value={formData.bookmaker_id}
+                  onChange={(value) => handleInputChange('bookmaker_id', value)}
+                  label="Casa de Apostas *"
+                  required />
+
+
+                <div>
+                  <Label htmlFor="procedure_type" className="text-purple-200 font-semibold">
+                    Tipo de Procedimento
+                  </Label>
+                  <Select
+                    value={formData.procedure_type}
+                    onValueChange={(value) => {
+                      handleInputChange('procedure_type', value); // This will also update is_freebet
+                    }}>
+
+                    <SelectTrigger className="mt-2 bg-purple-900/30 border-purple-700 text-white h-12">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700">
+                      <SelectItem value="procedimento_freebet" className="text-white">📋 Procedimento de Freebet</SelectItem>
+                      <SelectItem value="extracao_freebet" className="text-white">💎 Extração de Freebet</SelectItem>
+                      <SelectItem value="giros_gratis" className="text-white">🎰 Giros Grátis</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {isProcedimentoFreebet &&
+                    <p className="text-xs text-purple-300 mt-2">
+                      💡 Você está usando <strong>dinheiro real</strong> para tentar ganhar a freebet
+                    </p>
+                  }
+                </div>
+
+                <div>
+                  <Label htmlFor="procedure_loss" className="text-purple-200">
+                    Custo do Procedimento (R$)
+                  </Label>
+                  <Input
+                    id="procedure_loss"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.procedure_loss}
+                    onChange={(e) => handleInputChange('procedure_loss', e.target.value)}
+                    placeholder="0.00"
+                    className="mt-1 bg-purple-900/30 border-purple-700 text-white" />
+
+                  <p className="text-xs text-purple-300 mt-1">
+                    Custo para liberar a freebet, rodar giros grátis, etc.
+                  </p>
+                </div>
+              </div>
+
+              {/* SEÇÃO DE AUTO-CRIAÇÃO DE PROMOÇÃO */}
+              <Card className="bg-purple-900/20 border-purple-700/50">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg text-purple-200 flex items-center gap-2">
+                    <Gift className="w-5 h-5" />
+                    Dados da Freebet (Auto-criação de Promoção)
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-6 space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="freebet_value" className="text-purple-200">
+                        Valor da Freebet (R$)
+                      </Label>
+                      <Input
+                        id="freebet_value"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formData.freebet_value}
+                        onChange={(e) => handleInputChange('freebet_value', e.target.value)}
+                        placeholder="0.00"
+                        className="mt-1 bg-purple-900/30 border-purple-700 text-white"
+                      />
+                      {isProcedimentoFreebet ? (
+                        <p className="text-xs text-green-300 mt-1">
+                          💵 Valor da freebet que você vai ganhar com este procedimento
+                        </p>
+                      ) : (
+                        <p className="text-xs text-purple-300 mt-1">
+                          💎 Valor da freebet que você está extraindo/usando
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <Label htmlFor="freebet_expiry_date" className="text-purple-200">
+                        Data de Expiração
+                      </Label>
+                      <Input
+                        id="freebet_expiry_date"
+                        type="date"
+                        value={formData.freebet_expiry_date}
+                        onChange={(e) => handleInputChange('freebet_expiry_date', e.target.value)}
+                        className="mt-1 bg-purple-900/30 border-purple-700 text-white"
+                      />
+                      <p className="text-xs text-purple-300 mt-1">
+                        ⏰ Opcional - quando a freebet expira
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-3">
+                    <Switch
+                      checked={formData.needs_manual_activation}
+                      onCheckedChange={(checked) => handleInputChange('needs_manual_activation', checked)}
+                      id="needs_manual_activation"
+                    />
+                    <Label htmlFor="needs_manual_activation" className="text-purple-200">
+                      Precisa de Ativação Manual
+                    </Label>
+                  </div>
+
+                  {formData.needs_manual_activation && (
+                    <div>
+                      <Label htmlFor="activation_instructions" className="text-purple-200">
+                        Instruções de Ativação
+                      </Label>
+                      <Textarea
+                        id="activation_instructions"
+                        value={formData.activation_instructions}
+                        onChange={(e) => handleInputChange('activation_instructions', e.target.value)}
+                        placeholder="Ex: Ir em Promoções > Ativar Freebet > Confirmar"
+                        className="mt-1 h-20 bg-purple-900/30 border-purple-700 text-white"
+                      />
+                    </div>
+                  )}
+
+                  <Alert className="bg-purple-900/30 border-purple-700/50">
+                    <Gift className="w-4 h-4 text-purple-400" />
+                    <AlertDescription className="text-purple-200 text-sm">
+                      {formData.procedure_type === 'extracao_freebet'
+                        ? '✅ Esta freebet será marcada como EXTRAÍDA automaticamente'
+                        : '💡 Uma promoção será criada automaticamente quando você salvar esta aposta'}
+                    </AlertDescription>
+                  </Alert>
+                </CardContent>
+              </Card>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <Label htmlFor="market" className="text-purple-200">Mercado</Label>
+                  <Input
+                    id="market"
+                    value={formData.market}
+                    onChange={(e) => handleInputChange('market', e.target.value)}
+                    placeholder="Ex: Resultado Final, Over/Under"
+                    className="mt-1 bg-purple-900/30 border-purple-700 text-white" />
+
+                </div>
+
+                <div>
+                  <Label htmlFor="selection" className="text-purple-200">Seleção</Label>
+                  <Input
+                    id="selection"
+                    value={formData.selection}
+                    onChange={(e) => handleInputChange('selection', e.target.value)}
+                    placeholder="Ex: Casa, Over 2.5"
+                    className="mt-1 bg-purple-900/30 border-purple-700 text-white" />
+
+                </div>
+
+                <div>
+                  <Label htmlFor="bet_url" className="text-purple-200">Link da Aposta</Label>
+                  <Input
+                    id="bet_url"
+                    type="url"
+                    value={formData.bet_url}
+                    onChange={(e) => handleInputChange('bet_url', e.target.value)}
+                    placeholder="https://bet365.com/..."
+                    className="mt-1 bg-purple-900/30 border-purple-700 text-white" />
+
+                </div>
+
+                <div>
+                  <Label htmlFor="stake" className="text-purple-200">
+                    {isProcedimentoFreebet ? 'Valor Apostado (R$)' : 'Valor da Freebet (R$)'}
+                  </Label>
+                  <Input
+                    id="stake"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.stake}
+                    onChange={(e) => handleInputChange('stake', e.target.value)}
+                    placeholder="0.00"
+                    className="mt-1 bg-purple-900/30 border-purple-700 text-white" />
+
+                  {isProcedimentoFreebet ?
+                    <p className="text-xs text-blue-400 mt-1">
+                      💵 Saldo Real - será contado como investimento
+                    </p> :
+
+                    <p className="text-xs text-purple-400 mt-1">
+                      💎 Freebet - NÃO conta como investimento real
+                    </p>
+                  }
+                </div>
+
+                <div>
+                  <Label htmlFor="odds" className="text-purple-200">Odd</Label>
+                  <Input
+                    id="odds"
+                    type="number"
+                    step="0.01"
+                    min="1"
+                    value={formData.odds}
+                    onChange={(e) => handleInputChange('odds', e.target.value)}
+                    placeholder="1.00"
+                    className="mt-1 bg-purple-900/30 border-purple-700 text-white" />
+
+                </div>
+
+                <div>
+                  <Label htmlFor="bet_type" className="text-purple-200">Tipo de Aposta</Label>
+                  <Select value={formData.bet_type} onValueChange={(value) => handleInputChange('bet_type', value)}>
+                    <SelectTrigger className="mt-1 bg-purple-900/30 border-purple-700 text-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700">
+                      <SelectItem value="normal" className="text-white">Normal</SelectItem>
+                      <SelectItem value="protecao" className="text-white">Proteção</SelectItem>
+                      <SelectItem value="lay" className="text-white">Lay</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center space-x-3 pt-6">
+                  <Switch
+                    checked={formData.is_multiple}
+                    onCheckedChange={(checked) => handleInputChange('is_multiple', checked)} />
+
+                  <Label className="text-purple-200">Aposta Múltipla</Label>
+                </div>
+              </div>
+
+              <AdditionalBets
+                value={formData.additional_bets}
+                onChange={(value) => handleInputChange('additional_bets', value)}
+                mainStake={parseFloat(formData.stake)}
+                mainOdds={parseFloat(formData.odds)}
+                numAccounts={(formData.include_main_account ? 1 : 0) + formData.selected_third_party_profiles.length}
+                isFreebetExtraction={formData.is_freebet} // Dynamically pass isFreebetExtraction
+              />
+
+              <ProtectionBookmakers
+                protections={formData.protection_bookmakers}
+                onChange={(value) => handleInputChange('protection_bookmakers', value)}
+                mainStake={parseFloat(formData.stake)}
+                mainOdds={parseFloat(formData.odds)}
+                isFreebetExtraction={formData.is_freebet} // Dynamically pass isFreebetExtraction
+                numAccounts={(formData.include_main_account ? 1 : 0) + formData.selected_third_party_profiles.length} />
+
+              {!surebetResults && formData.stake && formData.odds && (!formData.profit_loss || formData.profit_loss <= 0) &&
+                <div className={`${parseFloat(calculatePotentialProfit()) >= 0 ?
+                  'bg-gradient-to-r from-purple-900/20 to-emerald-900/20 border-purple-700' :
+                  'bg-gradient-to-r from-red-900/20 to-rose-900/20 border-red-800'} border-2 p-4 rounded-xl`
+                }>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Calculator className={`w-5 h-5 ${parseFloat(calculatePotentialProfit()) >= 0 ?
+                        'text-purple-400' :
+                        'text-red-400'}`
+                      } />
+                      <span className={`font-semibold ${parseFloat(calculatePotentialProfit()) >= 0 ?
+                        'text-purple-300' :
+                        'text-red-300'}`
+                      }>
+                        Lucro Líquido Potencial:
+                      </span>
+                    </div>
+                    <span className={`text-2xl font-bold ${parseFloat(calculatePotentialProfit()) >= 0 ?
+                      'text-purple-400' :
+                      'text-red-400'}`
+                    }>
+                      R$ {calculatePotentialProfit()}
+                    </span>
+                  </div>
+                  {isProcedimentoFreebet ?
+                    <p className="text-xs text-blue-400 mt-2 font-semibold">
+                      💵 Custo da Aposta Principal: R$ {parseFloat(formData.stake).toFixed(2)} (será contado como investimento)
+                    </p> :
+                    <p className="text-xs text-purple-400 mt-2 font-semibold">
+                      💎 Modo Freebet: Stake de R$ {parseFloat(formData.stake).toFixed(2)} não conta como investimento
+                    </p>
+                  }
+                  {formData.procedure_loss > 0 &&
+                    <p className="text-xs text-slate-400 mt-1">
+                      Inclui dedução de R$ {parseFloat(formData.procedure_loss).toFixed(2)} do custo do procedimento
+                    </p>
+                  }
+                </div>
+              }
+
+              <div className="flex items-center space-x-3">
+                <Switch
+                  checked={formData.notifications_enabled}
+                  onCheckedChange={(checked) => handleInputChange('notifications_enabled', checked)}
+                  id="notifications_enabled" />
+
+                <Label htmlFor="notifications_enabled" className="text-purple-200">Ativar notificações para esta freebet</Label>
+              </div>
+
+              <div>
+                <Label htmlFor="notes" className="text-purple-200">Observações</Label>
+                <Textarea
+                  id="notes"
+                  value={formData.notes}
+                  onChange={(e) => handleInputChange('notes', e.target.value)}
+                  placeholder="Adicione suas observações sobre esta freebet..."
+                  className="mt-1 h-24 bg-purple-900/30 border-purple-700 text-white" />
+
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* NOVO: Campo de Lucro/Prejuízo Manual */}
+          <Card className="border-0 shadow-2xl bg-gradient-to-br from-purple-800/50 to-slate-800 border-purple-700">
+            <CardHeader className="border-b border-purple-700/50">
+              <CardTitle className="text-xl font-bold text-white flex items-center gap-2">
+                <DollarSign className="w-6 h-6 text-green-400" />
+                Resultado Manual (Opcional)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6 space-y-4">
+              <Alert className="bg-purple-900/20 border-purple-700">
+                <AlertDescription className="text-purple-200 text-sm">
+                  💡 Se você já extraiu a freebet, insira aqui o lucro líquido obtido.
+                </AlertDescription>
+              </Alert>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="manual_profit_loss" className="text-purple-200 font-semibold">
+                    Lucro Líquido (R$)
+                  </Label>
+                  <Input
+                    id="manual_profit_loss"
+                    type="number"
+                    step="0.01"
+                    value={formData.profit_loss !== null ? formData.profit_loss : ''} // Display empty string for null
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value);
+                      handleInputChange('profit_loss', isNaN(value) ? null : value);
+                      
+                      // Marcar como extraída se houver lucro
+                      if (!isNaN(value) && value > 0) {
+                        handleInputChange('status', 'green');
+                        handleInputChange('procedure_type', 'extracao_freebet');
+                        if (!formData.settlement_date) { // Only set if not already manually set
+                           handleInputChange('settlement_date', new Date().toISOString());
+                        }
+                      }
+                    }}
+                    placeholder="0.00"
+                    className="mt-2 bg-purple-900/30 border-purple-700 text-white h-12"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="settlement_date" className="text-purple-200 font-semibold">
+                    Data de Extração
+                  </Label>
+                  <Input
+                    id="settlement_date"
+                    type="date"
+                    value={formData.settlement_date ? new Date(formData.settlement_date).toISOString().split('T')[0] : ''}
+                    onChange={(e) => handleInputChange('settlement_date', e.target.value ? new Date(e.target.value).toISOString() : '')}
+                    className="mt-2 bg-purple-900/30 border-purple-700 text-white h-12"
+                  />
+                </div>
+              </div>
+
+              {formData.profit_loss > 0 && (
+                <div className="p-4 rounded-xl bg-green-900/20 border border-green-700">
+                  <p className="text-sm font-semibold text-green-300">
+                    ✅ Extração confirmada: R$ {formData.profit_loss.toFixed(2)}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Promoção será marcada como EXTRAÍDA automaticamente
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <AccountSelector
+            selectedProfiles={formData.selected_third_party_profiles}
+            includeMainAccount={formData.include_main_account}
+            onProfilesChange={(profiles) => setFormData((prev) => ({ ...prev, selected_third_party_profiles: profiles }))}
+            onMainAccountChange={(include) => setFormData((prev) => ({ ...prev, include_main_account: include }))} />
+
+
+          <div className="flex justify-end gap-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate(createPageUrl("bets"))}
+              disabled={isSubmitting}
+              className="bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700">
+
+              Cancelar
+            </Button>
+            <Button
+              type="submit"
+              disabled={isSubmitting}
+              className="bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-700 hover:to-purple-600 shadow-lg shadow-purple-500/30">
+
+              {isSubmitting ?
+                <>
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                  Salvando...
+                </> :
+
+                <>
+                  <Save className="w-5 h-5 mr-2" />
+                  Salvar Freebet
+                </>
+              }
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>);
+
+}
