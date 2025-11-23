@@ -1,0 +1,201 @@
+import React, { useState } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card } from "@/components/ui/card";
+import { Tabs, TabsList, TabsContent, TabsTrigger } from "@/components/ui/tabs";
+import {
+  User,
+  Bell,
+  Palette,
+  Globe,
+  Database,
+  Shield,
+  CreditCard,
+  HelpCircle,
+  Send,
+  Gift
+} from "lucide-react";
+import { toast } from "sonner";
+
+// Components
+import ProfileSettings from "../components/settings/ProfileSettings";
+import NotificationsSettings from "../components/settings/NotificationsSettings";
+import ThemeSettings from '../components/settings/ThemeSettings';
+import RegionalSettings from '../components/settings/RegionalSettings';
+import OfflineDataSettings from '../components/settings/OfflineDataSettings';
+import SecuritySettings from "../components/settings/SecuritySettings";
+import DataPrivacySettings from "../components/settings/DataPrivacySettings";
+import SubscriptionSettings from "../components/settings/SubscriptionSettings";
+import SupportSettings from "../components/settings/SupportSettings";
+import TelegramSettings from "../components/settings/TelegramSettings";
+import FreebetSettings from "../components/settings/FreebetSettings";
+
+/**
+ * ⚙️ COMPREHENSIVE SETTINGS PAGE
+ * 
+ * Complete user preferences management:
+ * - Profile & Personal Info
+ * - Notifications (Promotions, Sync, AI)
+ * - Theme Customization (Dark/Light, Colors)
+ * - Regional (Currency, Language)
+ * - Offline Data Management
+ * - Security & Privacy
+ * - Subscription
+ * - Support
+ */
+
+export default function SettingsPage() {
+  const queryClient = useQueryClient();
+
+  const { data: user, isLoading } = useQuery({
+    queryKey: ['current-user'],
+    queryFn: async () => {
+      return await base44.auth.me();
+    },
+    staleTime: Infinity
+  });
+
+  const updateUserMutation = useMutation({
+    mutationFn: async (data) => {
+      console.log('💾 [SETTINGS] Salvando preferências:', data);
+      const result = await base44.auth.updateMe(data);
+      console.log('✅ [SETTINGS] Salvo com sucesso:', result);
+      return result;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['current-user'] });
+      toast.success('✅ Configurações salvas com sucesso!');
+      console.log('✅ [SETTINGS] Queries invalidadas, user atualizado:', data);
+    },
+    onError: (error) => {
+      console.error('❌ [SETTINGS] Erro ao salvar:', error);
+      toast.error('❌ Erro ao salvar: ' + error.message);
+    }
+  });
+
+  const tabs = [
+    {
+      id: 'profile',
+      label: 'Perfil',
+      icon: User,
+      component: ProfileSettings
+    },
+    {
+      id: 'notifications',
+      label: 'Notificações',
+      icon: Bell,
+      component: NotificationsSettings
+    },
+    {
+      id: 'freebets',
+      label: 'Freebets',
+      icon: Gift,
+      component: FreebetSettings
+    },
+    {
+      id: 'theme',
+      label: 'Tema',
+      icon: Palette,
+      component: ThemeSettings
+    },
+    {
+      id: 'regional',
+      label: 'Regional',
+      icon: Globe,
+      component: RegionalSettings
+    },
+    {
+      id: 'offline',
+      label: 'Dados Offline',
+      icon: Database,
+      component: OfflineDataSettings
+    },
+    {
+      id: 'telegram',
+      label: 'Telegram',
+      icon: Send,
+      component: TelegramSettings
+    },
+    {
+      id: 'security',
+      label: 'Segurança',
+      icon: Shield,
+      component: SecuritySettings
+    },
+    {
+      id: 'privacy',
+      label: 'Privacidade',
+      icon: Shield,
+      component: DataPrivacySettings
+    },
+    {
+      id: 'subscription',
+      label: 'Plano',
+      icon: CreditCard,
+      component: SubscriptionSettings
+    },
+    {
+      id: 'support',
+      label: 'Suporte',
+      icon: HelpCircle,
+      component: SupportSettings
+    }
+  ];
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center">
+        <div className="text-white">Carregando configurações...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4 md:p-6 lg:p-8">
+      <div className="max-w-6xl mx-auto space-y-6">
+        
+        {/* HEADER */}
+        <div className="mb-8">
+          <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
+            Configurações
+          </h1>
+          <p className="text-slate-400">
+            Gerencie suas preferências e configurações do sistema
+          </p>
+        </div>
+
+        <Tabs defaultValue="profile" className="w-full">
+          <TabsList className="grid w-full grid-cols-5 md:grid-cols-10 bg-slate-800/50 border border-slate-700 mb-6 p-1 h-auto gap-1">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <TabsTrigger
+                  key={tab.id}
+                  value={tab.id}
+                  className="flex flex-col items-center justify-center gap-1 p-2 h-full data-[state=active]:bg-gradient-to-br data-[state=active]:from-blue-600 data-[state=active]:to-purple-600 data-[state=active]:text-white transition-all rounded-lg"
+                >
+                  <Icon className="w-4 h-4 md:w-5 md:h-5" />
+                  <span className="text-xs md:text-sm font-semibold text-center">
+                    {tab.label}
+                  </span>
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+
+          {tabs.map((tab) => {
+            const Component = tab.component;
+            return (
+              <TabsContent key={tab.id} value={tab.id} className="space-y-6">
+                <Component
+                  user={user}
+                  onUpdate={(data) => updateUserMutation.mutate(data)}
+                />
+              </TabsContent>
+            );
+          })}
+        </Tabs>
+      </div>
+    </div>
+  );
+}
