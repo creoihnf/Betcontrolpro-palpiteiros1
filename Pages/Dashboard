@@ -1,0 +1,657 @@
+import React, { useMemo, useEffect } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { motion } from "framer-motion";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import {
+  TrendingUp,
+  DollarSign,
+  Target,
+  Plus,
+  Wallet,
+  RefreshCw,
+  Calculator,
+  Gift,
+  BookOpen,
+  Calendar,
+  Percent,
+  AlertTriangle,
+  Home,
+  BarChart3
+} from "lucide-react";
+import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear, parseISO, differenceInDays } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import ProfitChart from "../components/dashboard/ProfitChart";
+import NotesWidget from "../components/dashboard/NotesWidget";
+import PendingItemsWidget from "../components/dashboard/PendingItemsWidget";
+import InteractiveROIChart from "../components/dashboard/InteractiveROIChart";
+import { createPageUrl } from "@/utils";
+import { useNavigate } from "react-router-dom";
+import { toast } from 'sonner';
+import RecentOperations from "../components/dashboard/RecentOperations";
+import AdvancedDateRangePicker from "../components/reports/AdvancedDateRangePicker";
+import PerformanceBreakdown from "../components/reports/PerformanceBreakdown";
+import AdvancedCharts from "../components/reports/AdvancedCharts";
+import ExportReport from "../components/reports/ExportReport";
+import useDashboardData from "../components/hooks/useDashboardData";
+import OptimizedDateFilter from "../components/dashboard/OptimizedDateFilter";
+import { Loader2 } from "lucide-react";
+import { DashboardFilterProvider } from "../components/contexts/DashboardFilterContext";
+
+function DashboardContent() {
+  const navigate = useNavigate();
+  const [isMobile, setIsMobile] = React.useState(false);
+  const [showAdvancedReports, setShowAdvancedReports] = React.useState(false);
+  const [dateRange, setDateRange] = React.useState({ 
+    from: startOfMonth(new Date()), 
+    to: endOfMonth(new Date()) 
+  });
+
+  // ✅ Hook otimizado com cache e filtros
+  const {
+    bets,
+    profitRecords,
+    wallets,
+    stats: currentPeriodStats,
+    totalBalance,
+    isFetching,
+    refetch
+  } = useDashboardData();
+
+  const { data: currentUser, isLoading: userLoading } = useQuery({
+    queryKey: ['current-user'],
+    queryFn: async () => {
+      try {
+        return await base44.auth.me();
+      } catch (error) {
+        return null;
+      }
+    },
+    staleTime: 300000,
+    retry: false
+  });
+
+  const { data: bookmakers = [] } = useQuery({
+    queryKey: ['dashboard-bookmakers'],
+    queryFn: async () => {
+      const data = await base44.entities.Bookmaker.list();
+      return data.filter(b => b.is_active);
+    },
+    staleTime: 10 * 60 * 1000,
+    cacheTime: 30 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const { data: promotions = [] } = useQuery({
+    queryKey: ['dashboard-promotions'],
+    queryFn: () => base44.entities.Promotion.list(),
+    enabled: !!currentUser?.email,
+    staleTime: 2 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000
+  });
+
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const checkMobile = () => setIsMobile(window.innerWidth < 768);
+      checkMobile();
+      window.addEventListener('resize', checkMobile);
+      return () => window.removeEventListener('resize', checkMobile);
+    }
+  }, []);
+
+  const handleManualRefresh = async () => {
+    await refetch();
+    toast.success('✅ Dashboard atualizado!');
+  };
+
+
+
+
+
+  if (userLoading) {
+    return (
+      <div className="w-full min-h-screen flex items-center justify-center bg-slate-950">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full mx-auto mb-4 animate-spin" />
+          <p className="text-slate-400">Carregando...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="w-full min-h-screen flex items-center justify-center bg-slate-950 p-6">
+        <Card className="bg-slate-800 border-slate-700 p-8 max-w-md">
+          <div className="text-center">
+            <AlertTriangle className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
+            <p className="text-white text-lg font-semibold mb-4">Erro ao carregar dados</p>
+            <p className="text-slate-400 text-sm mb-6">Não foi possível carregar suas informações. Tente novamente.</p>
+            <div className="space-y-3">
+              <Button onClick={() => window.location.reload()} className="w-full bg-blue-600 hover:bg-blue-700">
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Recarregar
+              </Button>
+              <Button onClick={() => navigate(createPageUrl('Home'))} variant="outline" className="w-full border-slate-600 text-slate-300">
+                <Home className="w-4 h-4 mr-2" />
+                Ir para Home
+              </Button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      width: '100%',
+      maxWidth: '100vw',
+      minHeight: '100vh',
+      padding: isMobile ? '16px 12px' : '24px 32px',
+      background: '#0a0a0a',
+      overflowX: 'hidden'
+    }}>
+      <div style={{ maxWidth: '1400px', margin: '0 auto', width: '100%' }}>
+
+        <motion.div
+          style={{ marginBottom: '24px' }}
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+        >
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px'
+          }}>
+            <div style={{ minWidth: 0, flex: '1 1 auto' }}>
+              <h1 style={{
+                fontSize: isMobile ? '24px' : '32px',
+                fontWeight: 900,
+                letterSpacing: '-1px',
+                color: '#ffffff',
+                marginBottom: '4px',
+                wordBreak: 'break-word'
+              }}>
+                Bem-vindo, {currentUser?.full_name?.split(' ')[0] || 'Usuário'}!
+              </h1>
+              <p style={{
+                color: 'rgba(176, 176, 176, 0.8)',
+                fontSize: isMobile ? '12px' : '14px',
+                fontWeight: 500
+              }}>
+                {format(new Date(), isMobile ? "dd/MM/yyyy" : "EEEE, dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button 
+                onClick={() => setShowAdvancedReports(!showAdvancedReports)}
+                variant={showAdvancedReports ? "default" : "outline"}
+                size={isMobile ? "sm" : "default"}
+              >
+                <BarChart3 className="w-4 h-4 mr-2" />
+                {isMobile ? '' : showAdvancedReports ? 'Relatórios Avançados' : 'Ver Relatórios'}
+              </Button>
+              <Button onClick={handleManualRefresh} variant="outline" size={isMobile ? "sm" : "default"}>
+                <RefreshCw className="w-4 h-4 mr-2" />
+                {isMobile ? '' : 'Atualizar'}
+              </Button>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* ✅ FILTRO DE DATA OTIMIZADO */}
+        <motion.div
+          style={{ marginBottom: '20px' }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+        >
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            flexWrap: 'wrap'
+          }}>
+            <OptimizedDateFilter />
+            
+            {/* INDICADOR DE LOADING */}
+            {isFetching && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 14px',
+                background: 'rgba(52, 152, 219, 0.1)',
+                border: '1px solid rgba(52, 152, 219, 0.3)',
+                borderRadius: '8px'
+              }}>
+                <Loader2 className="w-4 h-4 animate-spin" style={{ color: '#3498db' }} />
+                <span style={{ 
+                  color: '#3498db', 
+                  fontSize: '12px',
+                  fontWeight: 600
+                }}>
+                  Atualizando...
+                </span>
+              </div>
+            )}
+          </div>
+        </motion.div>
+
+        {/* ✅ NOVO: CARDS DE ESTATÍSTICAS (substitui OperationSummary) */}
+        <motion.div
+          style={{ marginBottom: '20px' }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile ? '1fr' : 'repeat(4, 1fr)',
+            gap: isMobile ? '12px' : '20px'
+          }}>
+            
+            {/* CARD 1: LUCRO TOTAL */}
+            <Card style={{
+              background: 'linear-gradient(135deg, rgba(46, 204, 113, 0.1) 0%, rgba(45, 80, 22, 0.05) 100%)',
+              border: '1px solid rgba(46, 204, 113, 0.3)',
+              borderRadius: '16px'
+            }}>
+              <CardContent style={{ padding: isMobile ? '16px' : '20px' }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  marginBottom: '12px'
+                }}>
+                  <div>
+                    <p style={{
+                      color: 'rgba(176, 176, 176, 0.8)',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      marginBottom: '8px'
+                    }}>Lucro Total</p>
+                  </div>
+                  <div style={{
+                    width: '40px',
+                    height: '40px',
+                    background: 'linear-gradient(135deg, #2ecc71 0%, #27ae60 100%)',
+                    borderRadius: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 4px 12px rgba(46, 204, 113, 0.3)'
+                  }}>
+                    <DollarSign style={{ width: '20px', height: '20px', color: '#ffffff' }} />
+                  </div>
+                </div>
+                <div>
+                  <p style={{
+                    fontSize: isMobile ? '28px' : '32px',
+                    fontWeight: 900,
+                    color: currentPeriodStats.totalProfit >= 0 ? '#2ecc71' : '#e74c3c',
+                    lineHeight: 1,
+                    marginBottom: '6px'
+                  }}>
+                    {currentPeriodStats.totalProfit >= 0 ? '+' : ''}R$ {currentPeriodStats.totalProfit.toFixed(2)}
+                  </p>
+                  <p style={{
+                    color: 'rgba(176, 176, 176, 0.7)',
+                    fontSize: '12px'
+                  }}>
+                    {currentPeriodStats.totalBets} aposta{currentPeriodStats.totalBets !== 1 ? 's' : ''}
+                    {currentPeriodStats.recordsProfit > 0 ? ` + ${profitRecords.length} lucro${profitRecords.length !== 1 ? 's' : ''}` : ''}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* CARD 2: MÉDIA DE LUCRO DIÁRIO */}
+            <Card style={{
+              background: 'linear-gradient(135deg, rgba(52, 152, 219, 0.1) 0%, rgba(41, 128, 185, 0.05) 100%)',
+              border: '1px solid rgba(52, 152, 219, 0.3)',
+              borderRadius: '16px'
+            }}>
+              <CardContent style={{ padding: isMobile ? '16px' : '20px' }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  marginBottom: '12px'
+                }}>
+                  <div>
+                    <p style={{
+                      color: 'rgba(176, 176, 176, 0.8)',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      marginBottom: '8px'
+                    }}>Média de Lucro Diário</p>
+                  </div>
+                  <div style={{
+                    width: '40px',
+                    height: '40px',
+                    background: 'linear-gradient(135deg, #3498db 0%, #2980b9 100%)',
+                    borderRadius: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 4px 12px rgba(52, 152, 219, 0.3)'
+                  }}>
+                    <TrendingUp style={{ width: '20px', height: '20px', color: '#ffffff' }} />
+                  </div>
+                </div>
+                <div>
+                  <p style={{
+                    fontSize: isMobile ? '28px' : '32px',
+                    fontWeight: 900,
+                    color: currentPeriodStats.averageDailyProfit >= 0 ? '#2ecc71' : '#e74c3c',
+                    lineHeight: 1,
+                    marginBottom: '6px'
+                  }}>
+                    {currentPeriodStats.averageDailyProfit >= 0 ? '+' : ''}R$ {currentPeriodStats.averageDailyProfit.toFixed(2)}
+                  </p>
+                  <p style={{
+                    color: 'rgba(176, 176, 176, 0.7)',
+                    fontSize: '12px'
+                  }}>
+                    {currentPeriodStats.periodDays} dia{currentPeriodStats.periodDays !== 1 ? 's' : ''} no período
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* CARD 3: TOTAL DE OPERAÇÕES */}
+            <Card style={{
+              background: 'linear-gradient(135deg, rgba(155, 89, 182, 0.1) 0%, rgba(142, 68, 173, 0.05) 100%)',
+              border: '1px solid rgba(155, 89, 182, 0.3)',
+              borderRadius: '16px'
+            }}>
+              <CardContent style={{ padding: isMobile ? '16px' : '20px' }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  marginBottom: '12px'
+                }}>
+                  <div>
+                    <p style={{
+                      color: 'rgba(176, 176, 176, 0.8)',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      marginBottom: '8px'
+                    }}>Total de Operações</p>
+                  </div>
+                  <div style={{
+                    width: '40px',
+                    height: '40px',
+                    background: 'linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%)',
+                    borderRadius: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 4px 12px rgba(155, 89, 182, 0.3)'
+                  }}>
+                    <Target style={{ width: '20px', height: '20px', color: '#ffffff' }} />
+                  </div>
+                </div>
+                <div>
+                  <p style={{
+                    fontSize: isMobile ? '28px' : '32px',
+                    fontWeight: 900,
+                    color: '#ffffff',
+                    lineHeight: 1,
+                    marginBottom: '6px'
+                  }}>
+                    {currentPeriodStats.totalOperations}
+                  </p>
+                  <p style={{
+                    color: 'rgba(176, 176, 176, 0.7)',
+                    fontSize: '12px'
+                  }}>
+                    {currentPeriodStats.totalBets} aposta{currentPeriodStats.totalBets !== 1 ? 's' : ''} + {profitRecords.length} lucro{profitRecords.length !== 1 ? 's' : ''}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* CARD 4: FREEBETS ATIVAS */}
+            <Card style={{
+              background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(124, 58, 237, 0.05) 100%)',
+              border: '1px solid rgba(139, 92, 246, 0.3)',
+              borderRadius: '16px'
+            }}>
+              <CardContent style={{ padding: isMobile ? '16px' : '20px' }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  marginBottom: '12px'
+                }}>
+                  <div>
+                    <p style={{
+                      color: 'rgba(176, 176, 176, 0.8)',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      marginBottom: '8px'
+                    }}>Freebets Ativas</p>
+                  </div>
+                  <div style={{
+                    width: '40px',
+                    height: '40px',
+                    background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                    borderRadius: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 4px 12px rgba(139, 92, 246, 0.3)'
+                  }}>
+                    <Gift style={{ width: '20px', height: '20px', color: '#ffffff' }} />
+                  </div>
+                </div>
+                <div>
+                  <p style={{
+                    fontSize: isMobile ? '28px' : '32px',
+                    fontWeight: 900,
+                    color: '#8b5cf6',
+                    lineHeight: 1,
+                    marginBottom: '6px'
+                  }}>
+                    {promotions.filter(p => 
+                      p.type === 'freebet' && 
+                      p.is_active && 
+                      !p.extraction_status &&
+                      (!p.end_date || new Date(p.end_date) >= new Date())
+                    ).length}
+                  </p>
+                  <p style={{
+                    color: 'rgba(176, 176, 176, 0.7)',
+                    fontSize: '12px'
+                  }}>
+                    R$ {promotions
+                      .filter(p => p.type === 'freebet' && p.is_active && !p.extraction_status)
+                      .reduce((sum, p) => sum + (p.reward_value || 0), 0)
+                      .toFixed(2)} disponíveis
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+          </div>
+        </motion.div>
+
+        {/* ✅ SALDO TOTAL EM CONTAS */}
+        <motion.div
+          style={{ marginBottom: '20px' }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25 }}
+        >
+          <Card style={{
+            background: 'linear-gradient(135deg, rgba(212, 175, 55, 0.08) 0%, rgba(45, 80, 22, 0.03) 100%)',
+            border: '1px solid rgba(212, 175, 55, 0.25)',
+            borderRadius: '16px',
+            overflow: 'hidden'
+          }}>
+            <CardContent style={{ 
+              padding: isMobile ? '20px' : '28px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '16px'
+            }}>
+              
+              {/* LADO ESQUERDO: Ícone + Informações */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '16px',
+                flex: isMobile ? '1 1 100%' : '1 1 auto'
+              }}>
+                
+                {/* Ícone */}
+                <div style={{
+                  width: '56px',
+                  height: '56px',
+                  background: 'linear-gradient(135deg, #d4af37 0%, #e5c158 100%)',
+                  borderRadius: '14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 6px 16px rgba(212, 175, 55, 0.35)',
+                  flexShrink: 0
+                }}>
+                  <Wallet style={{ 
+                    width: '28px', 
+                    height: '28px', 
+                    color: '#0a0a0a',
+                    strokeWidth: 2.5
+                  }} />
+                </div>
+
+                {/* Textos */}
+                <div style={{ minWidth: 0 }}>
+                  <p style={{
+                    color: 'rgba(176, 176, 176, 0.85)',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.8px',
+                    marginBottom: '4px'
+                  }}>
+                    Saldo Total em Contas
+                  </p>
+                  <p style={{
+                    color: 'rgba(176, 176, 176, 0.65)',
+                    fontSize: '12px',
+                    fontWeight: 500
+                  }}>
+                    {wallets.filter(w => w.is_active).length} conta{wallets.filter(w => w.is_active).length !== 1 ? 's' : ''} ativa{wallets.filter(w => w.is_active).length !== 1 ? 's' : ''}
+                  </p>
+                </div>
+              </div>
+
+              {/* LADO DIREITO: Valor */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: isMobile ? 'flex-start' : 'flex-end',
+                flex: isMobile ? '1 1 100%' : '0 0 auto'
+              }}>
+                <p style={{
+                  fontSize: isMobile ? '32px' : '40px',
+                  fontWeight: 900,
+                  color: '#d4af37',
+                  textShadow: '0 2px 12px rgba(212, 175, 55, 0.35)',
+                  lineHeight: 1,
+                  letterSpacing: '-0.5px'
+                }}>
+                  R$ {totalBalance.toFixed(2)}
+                </p>
+              </div>
+
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* ✅ EVOLUÇÃO DE LUCROS + NOTAS + PENDÊNCIAS */}
+        <motion.div
+          style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px', marginBottom: '20px' }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+        >
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr',
+            gap: isMobile ? '16px' : '24px'
+          }}>
+            <div style={{ minWidth: 0 }}>
+              <ProfitChart bets={bets} profitRecords={profitRecords} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', minWidth: 0 }}>
+              <PendingItemsWidget />
+              <NotesWidget />
+            </div>
+          </div>
+        </motion.div>
+
+        {/* ✅ RELATÓRIOS AVANÇADOS */}
+        {showAdvancedReports && (
+          <>
+            <motion.div
+              style={{ marginTop: '20px', marginBottom: '20px' }}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.5 }}
+            >
+              <AdvancedCharts bets={bets} dateRange={dateRange} />
+            </motion.div>
+
+            <motion.div
+              style={{ marginTop: '20px', marginBottom: '20px' }}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.6 }}
+            >
+              <PerformanceBreakdown bets={bets} bookmakers={bookmakers} />
+            </motion.div>
+          </>
+        )}
+
+        {/* ✅ OPERAÇÕES RECENTES */}
+        <motion.div
+          style={{ marginTop: '20px' }}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35 }}
+        >
+          <RecentOperations bets={bets} loading={false} />
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <DashboardFilterProvider>
+      <DashboardContent />
+    </DashboardFilterProvider>
+  );
+}
