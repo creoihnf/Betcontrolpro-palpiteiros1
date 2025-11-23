@@ -1,0 +1,280 @@
+
+import React, { useState, useEffect } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Zap,
+  Mail,
+  Settings,
+  Activity,
+  RefreshCw
+} from "lucide-react";
+import { toast } from 'sonner';
+import { format } from 'date-fns';
+import EmailForwardingSetup from '../components/imports/EmailForwardingSetup';
+import ImportDashboard from '../components/imports/ImportDashboard';
+import { autoImportBets } from '@/functions/autoImportBets';
+
+/**
+ * 🔌 BOOKMAKER INTEGRATIONS
+ *
+ * Central de integrações com casas de apostas
+ * - API Sync
+ * - Email Parsing
+ * - Import Dashboard
+ */
+
+export default function BookmakerIntegrationsPage() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    loadUser();
+  }, []);
+
+  const loadUser = async () => {
+    const user = await base44.auth.me();
+    setCurrentUser(user);
+  };
+
+  const { data: integrations = [] } = useQuery({
+    queryKey: ['integrations'],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.BookmakerIntegration.filter({
+        created_by: currentUser.email
+      });
+    },
+    enabled: !!currentUser
+  });
+
+  const { data: wallets = [] } = useQuery({
+    queryKey: ['wallets'],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.Wallet.filter({
+        created_by: currentUser.email
+      });
+    },
+    enabled: !!currentUser
+  });
+
+  const { data: bookmakers = [] } = useQuery({
+    queryKey: ['bookmakers'],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.Bookmaker.filter({
+        created_by: currentUser.email
+      });
+    },
+    enabled: !!currentUser
+  });
+
+  const { data: profiles = [] } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      return await base44.entities.Profile.filter({
+        created_by: currentUser.email
+      });
+    },
+    enabled: !!currentUser
+  });
+
+  const syncIntegrationMutation = useMutation({
+    mutationFn: async (integrationId) => {
+      return await autoImportBets({
+        bookmakerIntegrationId: integrationId,
+        forceSync: false
+      });
+    },
+    onSuccess: (data) => {
+      if (data.data?.success) {
+        toast.success(`✅ ${data.data.imported} aposta(s) importada(s)!`);
+        queryClient.invalidateQueries(['import-jobs']);
+        queryClient.invalidateQueries(['bets']);
+      } else {
+        toast.error('Erro na sincronização');
+      }
+    },
+    onError: (error) => {
+      toast.error('Erro ao sincronizar');
+      console.error(error);
+    }
+  });
+
+  const toggleIntegrationMutation = useMutation({
+    mutationFn: async ({ id, is_active }) => {
+      return await base44.entities.BookmakerIntegration.update(id, {
+        is_active: !is_active
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['integrations']);
+      toast.success('Status atualizado');
+    }
+  });
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4 md:p-8">
+      <div className="max-w-7xl mx-auto space-y-6">
+
+        {/* HEADER */}
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-bold text-white flex items-center gap-3">
+              <Zap className="w-8 h-8 text-blue-400" />
+              Integrações & Auto-Import
+            </h1>
+            <p className="text-slate-400 mt-2">
+              Importe apostas automaticamente via API ou Email
+            </p>
+          </div>
+        </div>
+
+        {/* TABS */}
+        <Tabs defaultValue="dashboard" className="w-full">
+          <TabsList className="grid w-full grid-cols-3 bg-slate-800/50 border border-slate-700">
+            <TabsTrigger value="dashboard">
+              <Activity className="w-4 h-4 mr-2" />
+              Dashboard
+            </TabsTrigger>
+            <TabsTrigger value="email">
+              <Mail className="w-4 h-4 mr-2" />
+              Email
+            </TabsTrigger>
+            <TabsTrigger value="api">
+              <Zap className="w-4 h-4 mr-2" />
+              API
+            </TabsTrigger>
+          </TabsList>
+
+          {/* TAB: DASHBOARD */}
+          <TabsContent value="dashboard" className="mt-6">
+            <ImportDashboard />
+          </TabsContent>
+
+          {/* TAB: EMAIL */}
+          <TabsContent value="email" className="mt-6">
+            <EmailForwardingSetup
+              wallets={wallets}
+              bookmakers={bookmakers}
+              profiles={profiles}
+            />
+          </TabsContent>
+
+          {/* TAB: API */}
+          <TabsContent value="api" className="mt-6">
+            <Card className="bg-slate-800/50 border-slate-700">
+              <CardHeader>
+                <CardTitle className="text-white flex items-center gap-2">
+                  <Zap className="w-5 h-5 text-blue-400" />
+                  Integrações via API
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {integrations.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Zap className="w-16 h-16 text-slate-600 mx-auto mb-4" />
+                    <p className="text-slate-400 mb-4">Nenhuma integração configurada</p>
+                    <p className="text-slate-500 text-sm">
+                      Integrações via API permitem sincronização automática de apostas
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {integrations.map(integration => (
+                      <div
+                        key={integration.id}
+                        className="p-4 bg-slate-900/50 border border-slate-700 rounded-lg"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <h4 className="text-white font-semibold">
+                                {integration.bookmaker_id}
+                              </h4>
+                              <Badge className={integration.is_active ? 'bg-green-600' : 'bg-slate-600'}>
+                                {integration.is_active ? 'Ativa' : 'Inativa'}
+                              </Badge>
+                              <Badge variant="outline" className="border-slate-600 text-slate-300 text-xs">
+                                {integration.integration_type}
+                              </Badge>
+                            </div>
+
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                              <div>
+                                <p className="text-slate-400 text-xs">Frequência</p>
+                                <p className="text-white">{integration.sync_frequency}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-400 text-xs">Sincronizadas</p>
+                                <p className="text-green-400 font-bold">
+                                  {integration.total_bets_synced || 0}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-slate-400 text-xs">Último Status</p>
+                                <Badge className={
+                                  integration.last_sync_status === 'success' ? 'bg-green-600' :
+                                  integration.last_sync_status === 'error' ? 'bg-red-600' :
+                                  'bg-slate-600'
+                                }>
+                                  {integration.last_sync_status || 'N/A'}
+                                </Badge>
+                              </div>
+                              {integration.last_sync_at && (
+                                <div>
+                                  <p className="text-slate-400 text-xs">Última Sync</p>
+                                  <p className="text-white text-xs">
+                                    {format(new Date(integration.last_sync_at), 'dd/MM HH:mm')}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => syncIntegrationMutation.mutate(integration.id)}
+                              disabled={syncIntegrationMutation.isLoading || !integration.is_active}
+                              className="bg-blue-600 hover:bg-blue-700"
+                            >
+                              <RefreshCw className="w-4 h-4" />
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => toggleIntegrationMutation.mutate(integration)}
+                              className="border-slate-600 text-white"
+                            >
+                              <Settings className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+
+                        {integration.sync_error_message && (
+                          <div className="mt-3 p-2 bg-red-900/20 border border-red-700 rounded">
+                            <p className="text-red-300 text-xs">
+                              ❌ {integration.sync_error_message}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </div>
+    </div>
+  );
+}
