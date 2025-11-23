@@ -1,0 +1,955 @@
+import React, { useState, useMemo, useEffect } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Building2, Plus, X, Link as LinkIcon, Search, Trash2, RefreshCw, DollarSign, Landmark, Edit2, Save } from "lucide-react";
+import { toast } from "sonner";
+import { motion } from "framer-motion";
+import StatCard from '../components/dashboard/StatCard';
+import PullToRefresh from '../components/mobile/PullToRefresh';
+
+const CANONICAL_BOOKMAKERS = [
+  { name: "Superbet", slug: "superbet" },
+  { name: "Betfair", slug: "betfair" },
+  { name: "Bet da Sorte", slug: "betdasorte" },
+  { name: "Sorteonline", slug: "sorteonline" },
+  { name: "Esportiva Bet", slug: "esportivabet" },
+  { name: "Brasil da Sorte", slug: "brasil_da_sorte" },
+  { name: "Verabet", slug: "verabet" },
+  { name: "Aposta Tudo", slug: "apostatudo" },
+  { name: "Luckbet", slug: "luckbet" },
+  { name: "Bet7k", slug: "bet7k" },
+  { name: "Sportingbet", slug: "sportingbet" },
+  { name: "Lotogreen", slug: "lotogreen" },
+  { name: "Cassinopix", slug: "cassinopix" },
+  { name: "Mr Jack", slug: "mrjack" },
+  { name: "Tivo Bet", slug: "tivobet" },
+  { name: "Pinnacle", slug: "pinnacle" },
+  { name: "Casa de Apostas", slug: "casadeapostas" },
+  { name: "Betfusion", slug: "betfusion" },
+  { name: "Betano", slug: "betano" },
+  { name: "Estrelabet", slug: "estrelabet" },
+  { name: "Flabet", slug: "flabet" },
+  { name: "Luvabet", slug: "luvabet" },
+  { name: "Bet Esporte", slug: "betesporte" },
+  { name: "Vbet", slug: "vbet" },
+  { name: "KTO", slug: "kto" },
+  { name: "Lance de Sorte", slug: "lancedesorte" },
+  { name: "Hiperbet", slug: "hiperbet" },
+  { name: "Jogo de Ouro", slug: "jogodeouro" },
+  { name: "MC Games", slug: "mcgames" },
+  { name: "Goldebet", slug: "goldebet" },
+  { name: "Faz1bet", slug: "faz1bet" },
+  { name: "Apuesta", slug: "apuesta" },
+  { name: "Betsul", slug: "betsul" },
+  { name: "Betfast", slug: "betfast" },
+  { name: "Vaidebet", slug: "vaidebet" },
+  { name: "F12", slug: "f12" },
+  { name: "Seubet", slug: "seubet" },
+  { name: "Bateubet", slug: "bateubet" },
+  { name: "7Games", slug: "7games" },
+  { name: "Bravobet", slug: "bravobet" },
+  { name: "Segurobet", slug: "segurobet" },
+  { name: "Betnacional", slug: "betnacional" },
+  { name: "Novibet", slug: "novibet" },
+  { name: "Aposta Ganha", slug: "apostaganha" },
+  { name: "Stake", slug: "stake" },
+  { name: "Bullsbet", slug: "bullsbet" },
+  { name: "Rei do Pitaco", slug: "reidopitaco" },
+  { name: "Pixbet", slug: "pixbet" },
+  { name: "Hanzbet", slug: "hanzbet" },
+  { name: "Uxbet", slug: "uxbet" },
+  { name: "Xpbet", slug: "xpbet" },
+  { name: "Metgol", slug: "metgol" },
+  { name: "H2bet", slug: "h2bet" },
+  { name: "Betpix", slug: "betpix" },
+  { name: "Bandbet", slug: "bandbet" },
+  { name: "BR4", slug: "br4" },
+  { name: "4Play", slug: "4play" },
+  { name: "Onabet", slug: "onabet" },
+  { name: "Betao", slug: "betao" },
+  { name: "MMA", slug: "mma" },
+  { name: "Realsbet", slug: "realsbet" },
+  { name: "Pagolbet", slug: "pagolbet" },
+  { name: "Papigames", slug: "papigames" },
+  { name: "Vivasorte", slug: "vivasorte" },
+  { name: "Betvip", slug: "betvip" },
+  { name: "Pix da Sorte", slug: "pixdasorte" },
+  { name: "Sportybet", slug: "sportybet" },
+  { name: "BRBet", slug: "brbet" },
+  { name: "Bolsa de Apostas", slug: "bolsadeapostas" },
+  { name: "Fulltbet", slug: "fulltbet" },
+  { name: "Betbra", slug: "betbra" },
+  { name: "Multibet", slug: "multibet" },
+  { name: "Bet do Jogo", slug: "betdojogo" },
+  { name: "Major Sports", slug: "majorsports" },
+  { name: "Betboom", slug: "betboom" },
+  { name: "Sorte na Bet", slug: "sortenabet" },
+  { name: "Alfabet", slug: "alfabet" },
+  { name: "Bigbet", slug: "bigbet" },
+  { name: "Suprema", slug: "suprema" },
+  { name: "BetMGM", slug: "betmgm" },
+  { name: "BRX", slug: "brx" },
+  { name: "Esportes da Sorte", slug: "esportesdasorte" },
+  { name: "Matchbook", slug: "matchbook" },
+  { name: "Galera Bet", slug: "galerabet" },
+  { name: "Vupi", slug: "vupi" },
+  { name: "Betaki", slug: "betaki" },
+  { name: "Playbet", slug: "playbet" },
+  { name: "Kingpanda", slug: "kingpanda" },
+  { name: "Falconsbet", slug: "falconsbet" },
+  { name: "Betwarrior", slug: "betwarrior" },
+];
+
+export default function BookmakersPage() {
+  const queryClient = useQueryClient();
+  const [currentUser, setCurrentUser] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showLinkDialog, setShowLinkDialog] = useState(false);
+  const [selectedBookmaker, setSelectedBookmaker] = useState(null);
+  const [selectedWallets, setSelectedWallets] = useState([]);
+  
+  // Estados para planilha de saldos
+  const [editingBalances, setEditingBalances] = useState({});
+  const [isEditMode, setIsEditMode] = useState(false);
+
+  useEffect(() => {
+    loadUser();
+  }, []);
+
+  const loadUser = async () => {
+    try {
+      const user = await base44.auth.me();
+      setCurrentUser(user);
+    } catch (error) {
+      console.error('[BOOKMAKERS] Erro ao carregar usuário:', error);
+      toast.error('Erro ao carregar usuário');
+    }
+  };
+
+  // Query de bookmakers do catálogo
+  const { data: allBookmakers = [], isLoading: loadingBookmakers } = useQuery({
+    queryKey: ['bookmakers-catalog'],
+    queryFn: async () => {
+      try {
+        const apiData = await base44.entities.Bookmaker.list();
+        const apiMap = new Map();
+        if (Array.isArray(apiData)) {
+          apiData.forEach(b => {
+            if (b.name) {
+              apiMap.set(b.name.toLowerCase().trim(), b);
+            }
+          });
+        }
+
+        const catalog = CANONICAL_BOOKMAKERS.map((canonical, index) => {
+          const apiRecord = apiMap.get(canonical.name.toLowerCase().trim());
+          if (apiRecord) {
+            return {
+              id: apiRecord.id,
+              name: canonical.name,
+              slug: canonical.slug,
+              website: apiRecord.website || null,
+              is_active: true
+            };
+          } else {
+            return {
+              id: `canonical_${canonical.slug}_${index}`,
+              name: canonical.name,
+              slug: canonical.slug,
+              is_active: true
+            };
+          }
+        });
+
+        return catalog.sort((a, b) => a.name.localeCompare(b.name));
+      } catch (error) {
+        return CANONICAL_BOOKMAKERS.map((b, index) => ({
+          id: `canonical_${b.slug}_${index}`,
+          name: b.name,
+          slug: b.slug,
+          is_active: true
+        })).sort((a, b) => a.name.localeCompare(b.name));
+      }
+    },
+    staleTime: 10 * 60 * 1000,
+  });
+
+  // Query de wallets (contas de apostas)
+  const { data: wallets = [] } = useQuery({
+    queryKey: ['wallets', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      try {
+        const data = await base44.entities.Wallet.filter({
+          created_by: currentUser.email,
+          is_active: true
+        });
+        return Array.isArray(data) ? data : [];
+      } catch (error) {
+        return [];
+      }
+    },
+    enabled: !!currentUser,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Query de contas bancárias
+  const { data: bankAccounts = [] } = useQuery({
+    queryKey: ['bank-accounts', currentUser?.email],
+    queryFn: async () => {
+      if (!currentUser) return [];
+      try {
+        const data = await base44.entities.BankAccount.filter({
+          created_by: currentUser.email,
+          is_active: true
+        });
+        return Array.isArray(data) ? data : [];
+      } catch (error) {
+        return [];
+      }
+    },
+    enabled: !!currentUser,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Mutation para atualizar saldo de wallet
+  const updateWalletBalanceMutation = useMutation({
+    mutationFn: async ({ walletId, newBalance }) => {
+      await base44.entities.Wallet.update(walletId, {
+        balance: parseFloat(newBalance)
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries(['wallets']);
+      await queryClient.invalidateQueries(['bank-accounts']);
+      await queryClient.refetchQueries(['wallets']);
+      await queryClient.refetchQueries(['bank-accounts']);
+    }
+  });
+
+  // Mutation para atualizar saldo bancário
+  const updateBankBalanceMutation = useMutation({
+    mutationFn: async ({ bankId, newBalance }) => {
+      await base44.entities.BankAccount.update(bankId, {
+        balance: parseFloat(newBalance)
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries(['bank-accounts']);
+      await queryClient.invalidateQueries(['wallets']);
+      await queryClient.refetchQueries(['bank-accounts']);
+      await queryClient.refetchQueries(['wallets']);
+    }
+  });
+
+  // Mutation para vincular casas
+  const linkWalletsMutation = useMutation({
+    mutationFn: async ({ bookmakerId, walletIds }) => {
+      for (const walletId of walletIds) {
+        const wallet = wallets.find(w => w.id === walletId);
+        if (!wallet) continue;
+        const currentIds = wallet.bookmaker_ids || [];
+        if (!currentIds.includes(bookmakerId)) {
+          await base44.entities.Wallet.update(walletId, {
+            bookmaker_ids: [...currentIds, bookmakerId]
+          });
+        }
+      }
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries(['wallets']);
+      await queryClient.refetchQueries(['wallets']);
+      toast.success('✅ Contas vinculadas com sucesso!');
+      setShowLinkDialog(false);
+      setSelectedBookmaker(null);
+      setSelectedWallets([]);
+    },
+    onError: () => {
+      toast.error('Erro ao vincular contas');
+    }
+  });
+
+  // Mutation para desvincular casa de uma conta
+  const unlinkWalletMutation = useMutation({
+    mutationFn: async ({ bookmakerId, walletId }) => {
+      const wallet = wallets.find(w => w.id === walletId);
+      if (!wallet) throw new Error('Wallet não encontrada');
+      const newIds = (wallet.bookmaker_ids || []).filter(id => id !== bookmakerId);
+      await base44.entities.Wallet.update(walletId, {
+        bookmaker_ids: newIds
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries(['wallets']);
+      await queryClient.refetchQueries(['wallets']);
+      toast.success('✅ Casa desvinculada!');
+    },
+    onError: () => {
+      toast.error('Erro ao desvincular');
+    }
+  });
+
+  const userBookmakerIds = useMemo(() => {
+    const ids = new Set();
+    wallets.forEach(wallet => {
+      (wallet.bookmaker_ids || []).forEach(id => ids.add(id));
+    });
+    return ids;
+  }, [wallets]);
+
+  const userBookmakers = useMemo(() => {
+    return allBookmakers.filter(b => userBookmakerIds.has(b.id));
+  }, [allBookmakers, userBookmakerIds]);
+
+  const totalBankBalance = useMemo(() => {
+    return bankAccounts.reduce((sum, bank) => sum + (parseFloat(bank.balance) || 0), 0);
+  }, [bankAccounts]);
+
+  const totalWalletsBalance = useMemo(() => {
+    return wallets.reduce((sum, wallet) => sum + (parseFloat(wallet.balance) || 0), 0);
+  }, [wallets]);
+
+  const handleLinkWallets = (bookmaker) => {
+    if (!currentUser) {
+      toast.error('Você precisa estar logado');
+      return;
+    }
+    if (wallets.length === 0) {
+      toast.error('Você não tem contas. Crie uma conta primeiro!');
+      return;
+    }
+    setSelectedBookmaker(bookmaker);
+    setSelectedWallets([]);
+    setShowLinkDialog(true);
+  };
+
+  const handleUnlinkWallet = (bookmakerId, walletId) => {
+    if (confirm('Desvincular esta casa desta conta?')) {
+      unlinkWalletMutation.mutate({ bookmakerId, walletId });
+    }
+  };
+
+  const toggleWalletSelection = (walletId) => {
+    setSelectedWallets(prev =>
+      prev.includes(walletId)
+        ? prev.filter(id => id !== walletId)
+        : [...prev, walletId]
+    );
+  };
+
+  const handleConfirmLink = () => {
+    if (selectedWallets.length === 0) {
+      toast.error('Selecione pelo menos uma conta');
+      return;
+    }
+    linkWalletsMutation.mutate({
+      bookmakerId: selectedBookmaker.id,
+      walletIds: selectedWallets
+    });
+  };
+
+  const handleManualRefresh = async () => {
+    await queryClient.invalidateQueries(['bookmakers-catalog']);
+    await queryClient.invalidateQueries(['wallets']);
+    await queryClient.invalidateQueries(['bank-accounts']);
+    toast.success('Dados atualizados!');
+  };
+
+  const getLinkedWallets = (bookmakerId) => {
+    return wallets.filter(wallet =>
+      (wallet.bookmaker_ids || []).includes(bookmakerId)
+    );
+  };
+
+  const filteredUserBookmakers = useMemo(() => {
+    if (!searchTerm) return userBookmakers;
+    return userBookmakers.filter(b =>
+      b.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [userBookmakers, searchTerm]);
+
+  // Funções da planilha de saldos
+  const handleBalanceChange = (type, id, value) => {
+    setEditingBalances(prev => ({
+      ...prev,
+      [`${type}-${id}`]: value
+    }));
+  };
+
+  const handleSaveBalances = async () => {
+    try {
+      const updates = [];
+      
+      for (const [key, value] of Object.entries(editingBalances)) {
+        const [type, id] = key.split('-');
+        const numValue = parseFloat(value);
+        
+        if (isNaN(numValue)) continue;
+        
+        if (type === 'wallet') {
+          updates.push(updateWalletBalanceMutation.mutateAsync({ 
+            walletId: id, 
+            newBalance: numValue 
+          }));
+        } else if (type === 'bank') {
+          updates.push(updateBankBalanceMutation.mutateAsync({ 
+            bankId: id, 
+            newBalance: numValue 
+          }));
+        }
+      }
+      
+      await Promise.all(updates);
+      toast.success('✅ Todos os saldos foram atualizados!');
+      setEditingBalances({});
+      setIsEditMode(false);
+    } catch (error) {
+      toast.error('Erro ao salvar saldos');
+    }
+  };
+
+  const getBalanceValue = (type, id, currentBalance) => {
+    const key = `${type}-${id}`;
+    return editingBalances[key] !== undefined 
+      ? editingBalances[key] 
+      : currentBalance?.toString() || '0';
+  };
+
+  if (!currentUser || (loadingBookmakers && allBookmakers.length === 0)) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#0a0a0a', padding: '32px' }}>
+        <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+          <div className="text-center py-12">
+            <RefreshCw className="w-12 h-12 animate-spin text-blue-400 mx-auto mb-4" />
+            <p className="text-white font-semibold text-lg">Carregando...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <PullToRefresh onRefresh={handleManualRefresh}>
+      <div style={{
+        width: '100%',
+        minHeight: '100vh',
+        padding: '24px 32px',
+        background: '#0a0a0a'
+      }}>
+        <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+          {/* Header com Saldo Bancário */}
+          <motion.div
+            style={{ marginBottom: '24px' }}
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '16px'
+            }}>
+              <div>
+                <h1 style={{
+                  fontSize: '32px',
+                  fontWeight: 900,
+                  color: '#ffffff',
+                  marginBottom: '8px'
+                }}>
+                  Gerenciamento de Saldos
+                </h1>
+                <div className="flex items-center gap-4">
+                  <p style={{ color: 'rgba(176, 176, 176, 0.8)', fontSize: '14px' }}>
+                    {userBookmakers.length} casas vinculadas
+                  </p>
+                  <div className="flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-green-900/30 to-emerald-900/30 border border-green-700/50 rounded-lg">
+                    <Landmark className="w-4 h-4 text-green-400" />
+                    <span className="text-green-300 font-bold">
+                      Saldo Bancário: R$ {totalBankBalance.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <Button
+                onClick={handleManualRefresh}
+                size="sm"
+                variant="outline"
+                className="border-slate-700 text-white hover:bg-slate-800"
+              >
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Atualizar
+              </Button>
+            </div>
+          </motion.div>
+
+          {/* PLANILHA DE SALDOS */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            style={{ marginBottom: '32px' }}
+          >
+            <Card className="bg-slate-800/50 border-slate-700">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <DollarSign className="w-5 h-5 text-green-400" />
+                    Planilha de Saldos
+                  </CardTitle>
+                  <div className="flex gap-2">
+                    {isEditMode ? (
+                      <>
+                        <Button
+                          onClick={handleSaveBalances}
+                          size="sm"
+                          className="bg-green-600 hover:bg-green-700"
+                        >
+                          <Save className="w-4 h-4 mr-2" />
+                          Salvar Todos
+                        </Button>
+                        <Button
+                          onClick={() => {
+                            setIsEditMode(false);
+                            setEditingBalances({});
+                          }}
+                          size="sm"
+                          variant="outline"
+                          className="border-slate-600 text-slate-300"
+                        >
+                          Cancelar
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        onClick={() => setIsEditMode(true)}
+                        size="sm"
+                        variant="outline"
+                        className="border-blue-600 text-blue-300 hover:bg-blue-900/20"
+                      >
+                        <Edit2 className="w-4 h-4 mr-2" />
+                        Modo Edição
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid md:grid-cols-2 gap-6">
+                  {/* Casas de Apostas */}
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-400 mb-3 flex items-center gap-2">
+                      <Building2 className="w-4 h-4" />
+                      CASAS DE APOSTAS ({wallets.length})
+                    </h3>
+                    <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
+                      {wallets.length === 0 ? (
+                        <div className="p-4 bg-slate-900/50 border border-slate-700 rounded-lg text-center">
+                          <p className="text-sm text-slate-500">Nenhuma conta de casa vinculada</p>
+                        </div>
+                      ) : (
+                        wallets.map(wallet => (
+                          <div
+                            key={wallet.id}
+                            className="flex items-center gap-3 p-3 bg-slate-900/50 border border-slate-700 rounded-lg"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-white truncate">
+                                {wallet.is_main_account ? 'Principal' : wallet.name}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-slate-400">R$</span>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={getBalanceValue('wallet', wallet.id, wallet.balance)}
+                                onChange={(e) => handleBalanceChange('wallet', wallet.id, e.target.value)}
+                                disabled={!isEditMode}
+                                className={`w-32 h-8 text-right ${
+                                  isEditMode 
+                                    ? 'bg-blue-900/20 border-blue-600 text-white' 
+                                    : 'bg-slate-800 border-slate-700 text-slate-300'
+                                }`}
+                              />
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <div className="mt-3 p-3 bg-gradient-to-r from-slate-800 to-slate-900 border border-slate-700 rounded-lg">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-bold text-slate-300">Total em Casas:</span>
+                        <span className="text-lg font-bold text-green-400">
+                          R$ {totalWalletsBalance.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Contas Bancárias */}
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-400 mb-3 flex items-center gap-2">
+                      <Landmark className="w-4 h-4" />
+                      CONTAS BANCÁRIAS ({bankAccounts.length})
+                    </h3>
+                    <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
+                      {bankAccounts.length === 0 ? (
+                        <div className="p-4 bg-slate-900/50 border border-slate-700 rounded-lg text-center">
+                          <p className="text-sm text-slate-500">Nenhuma conta bancária cadastrada</p>
+                        </div>
+                      ) : (
+                        bankAccounts.map(bank => (
+                          <div
+                            key={bank.id}
+                            className="flex items-center gap-3 p-3 bg-slate-900/50 border border-slate-700 rounded-lg"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-white truncate">
+                                {bank.bank_name || 'Conta Bancária'}
+                              </p>
+                              {bank.account_type && (
+                                <p className="text-xs text-slate-500">{bank.account_type}</p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-slate-400">R$</span>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={getBalanceValue('bank', bank.id, bank.balance)}
+                                onChange={(e) => handleBalanceChange('bank', bank.id, e.target.value)}
+                                disabled={!isEditMode}
+                                className={`w-32 h-8 text-right ${
+                                  isEditMode 
+                                    ? 'bg-blue-900/20 border-blue-600 text-white' 
+                                    : 'bg-slate-800 border-slate-700 text-slate-300'
+                                }`}
+                              />
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <div className="mt-3 p-3 bg-gradient-to-r from-green-900/30 to-emerald-900/30 border border-green-700/50 rounded-lg">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-bold text-green-300">Total Bancário:</span>
+                        <span className="text-lg font-bold text-green-400">
+                          R$ {totalBankBalance.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Saldo Total Consolidado */}
+                <div className="mt-6 p-4 bg-gradient-to-r from-slate-900 to-slate-800 border-2 border-yellow-600/50 rounded-lg">
+                  <div className="flex justify-between items-center">
+                    <span className="text-lg font-bold text-yellow-300">💰 SALDO TOTAL:</span>
+                    <span className="text-2xl font-black text-yellow-400">
+                      R$ {(totalBankBalance + totalWalletsBalance).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          {/* Barra de busca */}
+          <motion.div style={{ marginBottom: '24px' }}>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+              <Input
+                placeholder="Buscar nas suas casas vinculadas..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-12 bg-slate-800/50 border-slate-700 text-white h-12"
+              />
+            </div>
+          </motion.div>
+
+          {/* Lista de Casas Vinculadas */}
+          {filteredUserBookmakers.length === 0 ? (
+            <Card className="bg-slate-800/50 border-slate-700">
+              <CardContent className="p-12 text-center">
+                <Building2 className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+                <h3 className="text-xl font-bold mb-2 text-white">
+                  {searchTerm ? 'Nenhuma casa encontrada' : 'Nenhuma casa vinculada'}
+                </h3>
+                <p className="text-slate-400 mb-4">
+                  {searchTerm
+                    ? 'Tente outro termo de busca'
+                    : 'Use o catálogo abaixo para vincular casas às suas contas'
+                  }
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <motion.div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+                gap: '24px',
+                marginBottom: '48px'
+              }}
+            >
+              {filteredUserBookmakers.map((bookmaker, index) => {
+                const linkedWallets = getLinkedWallets(bookmaker.id);
+                return (
+                  <motion.div
+                    key={bookmaker.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.02 * index }}
+                  >
+                    <Card className="bg-slate-800/50 border-slate-700 hover:border-slate-600 transition-all">
+                      <CardHeader>
+                        <CardTitle className="flex items-start justify-between text-white">
+                          <div className="flex items-start gap-3 flex-1 min-w-0">
+                            <div style={{
+                              width: '40px',
+                              height: '40px',
+                              borderRadius: '10px',
+                              background: 'linear-gradient(135deg, rgba(45, 80, 22, 0.5), rgba(212, 175, 55, 0.5))',
+                              border: '1px solid rgba(212, 175, 55, 0.6)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center'
+                            }}>
+                              <Building2 className="w-5 h-5 text-yellow-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <h3 className="font-bold text-lg truncate">{bookmaker.name}</h3>
+                              {bookmaker.website && (
+                                <a
+                                  href={bookmaker.website}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-blue-400 hover:text-blue-300 truncate block"
+                                >
+                                  {bookmaker.website.replace('https://', '').replace('http://', '')}
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div>
+                          <div className="flex items-center justify-between mb-3">
+                            <Label className="text-slate-400 text-xs">
+                              Contas Vinculadas ({linkedWallets.length})
+                            </Label>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleLinkWallets(bookmaker)}
+                              className="border-green-700 text-green-300 hover:bg-green-900/20 text-xs h-7"
+                            >
+                              <LinkIcon className="w-3 h-3 mr-1" />
+                              Gerenciar
+                            </Button>
+                          </div>
+                          {linkedWallets.length === 0 ? (
+                            <div className="p-3 bg-slate-900/50 border border-slate-700 rounded-lg text-center">
+                              <p className="text-xs text-slate-500">
+                                Nenhuma conta vinculada
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="space-y-2 max-h-[150px] overflow-y-auto">
+                              {linkedWallets.map(wallet => (
+                                <div
+                                  key={wallet.id}
+                                  className="flex items-center justify-between p-2 bg-slate-900/50 border border-slate-700 rounded-lg"
+                                >
+                                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                                    <div
+                                      className="w-3 h-3 rounded-full"
+                                      style={{
+                                        background: wallet.is_main_account
+                                          ? 'linear-gradient(135deg, #2d5016, #d4af37)'
+                                          : '#8b5cf6'
+                                      }}
+                                    />
+                                    <span className="text-sm text-white truncate">
+                                      {wallet.is_main_account ? 'Conta Principal' : wallet.name}
+                                    </span>
+                                  </div>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={() => handleUnlinkWallet(bookmaker.id, wallet.id)}
+                                    className="h-6 w-6 hover:bg-red-900/20"
+                                  >
+                                    <X className="w-3 h-3 text-red-400" />
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                );
+              })}
+            </motion.div>
+          )}
+
+          {/* CATÁLOGO DE CASAS - Apenas para vincular */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            style={{ marginTop: '48px' }}
+          >
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-white mb-2">📚 Catálogo de Casas</h2>
+              <p className="text-slate-400 text-sm">
+                Selecione casas do catálogo para vincular às suas contas
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {allBookmakers.map(bookmaker => {
+                const isLinked = userBookmakerIds.has(bookmaker.id);
+                return (
+                  <div
+                    key={bookmaker.id}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      isLinked
+                        ? 'bg-green-900/20 border-green-600/50'
+                        : 'bg-slate-800/50 border-slate-700 hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 mb-3">
+                      <Building2 className={`w-4 h-4 ${isLinked ? 'text-green-400' : 'text-slate-400'}`} />
+                      <span className={`text-sm font-medium truncate ${isLinked ? 'text-green-300' : 'text-white'}`}>
+                        {bookmaker.name}
+                      </span>
+                    </div>
+                    {isLinked ? (
+                      <Badge className="bg-green-600 text-white w-full justify-center">
+                        ✓ Vinculada
+                      </Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        onClick={() => handleLinkWallets(bookmaker)}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white h-8"
+                      >
+                        <LinkIcon className="w-3 h-3 mr-1" />
+                        Vincular
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+
+          {/* Dialog de Vincular Contas */}
+          <Dialog open={showLinkDialog} onOpenChange={(open) => {
+            setShowLinkDialog(open);
+            if (!open) {
+              setSelectedBookmaker(null);
+              setSelectedWallets([]);
+            }
+          }}>
+            <DialogContent className="bg-slate-900 border-slate-700">
+              <DialogHeader>
+                <DialogTitle className="text-white flex items-center gap-2">
+                  <LinkIcon className="w-5 h-5 text-green-400" />
+                  Vincular Contas - {selectedBookmaker?.name}
+                </DialogTitle>
+                <DialogDescription className="text-slate-400">
+                  Selecione as contas que deseja vincular a esta casa
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                {wallets.length === 0 ? (
+                  <div className="p-6 bg-slate-800/50 border border-slate-700 rounded-lg text-center">
+                    <p className="text-slate-400 text-sm">
+                      Você não tem contas cadastradas. Crie uma conta primeiro!
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                    {wallets.map(wallet => {
+                      const isLinked = (wallet.bookmaker_ids || []).includes(selectedBookmaker?.id);
+                      const isSelected = selectedWallets.includes(wallet.id);
+                      return (
+                        <div
+                          key={wallet.id}
+                          onClick={() => !isLinked && toggleWalletSelection(wallet.id)}
+                          className={`p-3 rounded-lg border-2 transition-all ${
+                            isLinked
+                              ? 'bg-slate-800/30 border-slate-700 opacity-50 cursor-not-allowed'
+                              : isSelected
+                              ? 'bg-green-900/30 border-green-600 cursor-pointer'
+                              : 'bg-slate-800/50 border-slate-700 hover:border-green-600/50 cursor-pointer'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="w-4 h-4 rounded-full"
+                              style={{
+                                background: wallet.is_main_account
+                                  ? 'linear-gradient(135deg, #2d5016, #d4af37)'
+                                  : '#8b5cf6'
+                              }}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-white font-medium truncate">
+                                {wallet.is_main_account ? 'Conta Principal' : wallet.name}
+                              </p>
+                              {isLinked && (
+                                <p className="text-xs text-green-400">✓ Já vinculada</p>
+                              )}
+                            </div>
+                            {isSelected && !isLinked && (
+                              <Badge className="bg-green-600">Selecionada</Badge>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <DialogFooter className="gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowLinkDialog(false)}
+                  className="bg-slate-800 border-slate-700 text-slate-300"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={handleConfirmLink}
+                  disabled={selectedWallets.length === 0 || linkWalletsMutation.isPending}
+                  style={{
+                    background: selectedWallets.length > 0
+                      ? 'linear-gradient(135deg, #2d5016, #3d6b20)'
+                      : 'rgba(80, 80, 80, 0.5)',
+                    color: '#ffffff'
+                  }}
+                >
+                  {linkWalletsMutation.isPending
+                    ? 'Vinculando...'
+                    : `Vincular (${selectedWallets.length})`
+                  }
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </div>
+    </PullToRefresh>
+  );
+}
