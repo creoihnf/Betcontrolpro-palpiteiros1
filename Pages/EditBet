@@ -1,0 +1,598 @@
+import React, { useState, useEffect } from "react";
+import { base44 } from "@/api/base44Client";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Loader2, Save, X, AlertCircle, Building2, CheckCircle2, Users, Sparkles } from "lucide-react";
+import { toast } from "sonner";
+import { createPageUrl } from "@/utils";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import BookmakerSelector from "../components/bets/BookmakerSelector";
+import OddsInput from "../components/bets/OddsInput";
+import CurrencyInput from "@/components/ui/currency-input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+import AIUploadDialog from "../components/bets/AIUploadDialog";
+import SuperOddAccountSelector from "../components/bets/SuperOddAccountSelector"; // Assuming this component exists in the same folder
+
+export default function EditBetPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  
+  const betId = location.state?.betId;
+  const [selectedBetId, setSelectedBetId] = useState(betId);
+  const [relatedBets, setRelatedBets] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [aiUploadOpen, setAiUploadOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    event_name: '',
+    event_date: '',
+    bookmaker_combo_id: '',
+    market: '',
+    selection: '',
+    stake: '0',
+    odds: '1.00',
+    is_freebet: false,
+    notes: '',
+    // Added for SuperOdd functionality, even if not directly used in EditBetPage for existing bets
+    procedure_type: '',
+    selectedWallets: [], 
+  });
+
+  // Carregar aposta principal
+  const { data: mainBet, isLoading: loadingMainBet } = useQuery({
+    queryKey: ['bet', betId],
+    queryFn: async () => {
+      if (!betId) return null;
+      return await base44.entities.Bet.get(betId);
+    },
+    enabled: !!betId
+  });
+
+  // Carregar TODAS as apostas relacionadas (mesmo grupo)
+  const { data: allBets = [], isLoading: loadingAllBets } = useQuery({
+    queryKey: ['bets'],
+    queryFn: async () => {
+      const user = await base44.auth.me();
+      return await base44.entities.Bet.filter({ created_by: user.email });
+    }
+  });
+
+  // Carregar aposta selecionada
+  const { data: selectedBet, isLoading: loadingSelectedBet } = useQuery({
+    queryKey: ['bet', selectedBetId],
+    queryFn: async () => {
+      if (!selectedBetId) return null;
+      return await base44.entities.Bet.get(selectedBetId);
+    },
+    enabled: !!selectedBetId
+  });
+
+  // Carregar carteiras
+  const { data: wallets = [] } = useQuery({
+    queryKey: ['wallets'],
+    queryFn: async () => {
+      const user = await base44.auth.me();
+      return await base44.entities.Wallet.filter({ created_by: user.email });
+    }
+  });
+
+  // Carregar casas de apostas
+  const { data: bookmakers = [] } = useQuery({
+    queryKey: ['bookmakers'],
+    queryFn: async () => {
+      const user = await base44.auth.me();
+      return await base44.entities.Bookmaker.filter({ created_by: user.email });
+    }
+  });
+
+  // Carregar perfis
+  const { data: profiles = [] } = useQuery({
+    queryKey: ['profiles'],
+    queryFn: async () => {
+      const user = await base44.auth.me();
+      return await base44.entities.Profile.filter({ created_by: user.email });
+    }
+  });
+
+  // Identificar apostas relacionadas (mesmo evento, mercado, odd, data)
+  useEffect(() => {
+    if (mainBet && allBets.length > 0) {
+      const related = allBets.filter(bet => 
+        bet.event_name === mainBet.event_name &&
+        bet.market === mainBet.market &&
+        bet.selection === mainBet.selection &&
+        bet.odds === mainBet.odds &&
+        bet.event_date === mainBet.event_date
+      );
+      setRelatedBets(related);
+      console.log('📊 Apostas relacionadas encontradas:', related.length);
+    }
+  }, [mainBet, allBets]);
+
+  // Preencher formulário quando a aposta selecionada carregar
+  useEffect(() => {
+    if (selectedBet) {
+      setFormData({
+        event_name: selectedBet.event_name || '',
+        event_date: selectedBet.event_date ? new Date(selectedBet.event_date).toISOString().slice(0, 16) : '',
+        bookmaker_combo_id: selectedBet.bookmaker_id || '',
+        market: selectedBet.market || '',
+        selection: selectedBet.selection || '',
+        stake: String(selectedBet.stake || 0),
+        odds: String(selectedBet.odds || 1.00),
+        is_freebet: selectedBet.is_freebet || false,
+        notes: selectedBet.notes || '',
+        // These fields are not part of a standard bet object, so they default to initial state
+        procedure_type: '',
+        selectedWallets: []
+      });
+      console.log('✅ Formulário preenchido para aposta:', selectedBet.id);
+    }
+  }, [selectedBet]);
+
+  const updateMutation = useMutation({
+    mutationFn: async (data) => {
+      return await base44.entities.Bet.update(selectedBetId, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['bets']);
+      queryClient.invalidateQueries(['bet']);
+      toast.success('✅ Aposta atualizada!');
+      navigate(createPageUrl('Bets'));
+    },
+    onError: (error) => {
+      console.error('Erro ao atualizar:', error);
+      toast.error('❌ Erro ao atualizar aposta');
+    }
+  });
+
+  // Add this near other mutations
+  const trackStrategyMutation = useMutation({
+    mutationFn: async ({ betId: id, strategyId }) => { // Renamed betId to id to avoid conflict with outer scope betId
+      return await base44.functions.invoke('backtesting/trackLivePerformance', {
+        bet_id: id,
+        strategy_id: strategyId
+      });
+    },
+    onSuccess: (result) => {
+      if (result.data?.success) {
+        console.log('✅ Performance rastreada:', result.data.metrics);
+        
+        if (result.data.auto_paused) {
+          toast.warning('⚠️ Estratégia pausada automaticamente por underperformance');
+        }
+      }
+    },
+    onError: (error) => {
+      console.error('Erro ao rastrear performance:', error);
+      toast.error('❌ Erro ao rastrear performance da estratégia');
+    }
+  });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+
+    try {
+      const updateData = {
+        event_name: formData.event_name,
+        event_date: formData.event_date,
+        bookmaker_id: formData.bookmaker_combo_id,
+        market: formData.market,
+        selection: formData.selection,
+        stake: parseFloat(formData.stake) || 0,
+        odds: parseFloat(formData.odds) || 0,
+        is_freebet: formData.is_freebet,
+        notes: formData.notes
+      };
+
+      await updateMutation.mutateAsync(updateData);
+    } catch (error) {
+      console.error('Erro:', error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Modify the handleSubmit or status update to auto-track
+  // This function is new and currently unused in EditBetPage, as this page primarily handles bet details, not status changes.
+  // If status update functionality were added to this page, this function could be called.
+  const handleStatusUpdate = async (newStatus, strategyId = null) => { // Added strategyId for potential tracking
+    if (!selectedBetId) {
+      toast.error('❌ Nenhuma aposta selecionada para atualizar o status.');
+      return;
+    }
+    try {
+      await base44.entities.Bet.update(selectedBetId, { status: newStatus });
+      
+      // Se aposta foi resolvida, tentar rastrear em estratégias
+      if (['green', 'perda', 'cashout'].includes(newStatus) && strategyId) {
+        trackStrategyMutation.mutate({ betId: selectedBetId, strategyId: strategyId });
+      }
+
+      await queryClient.invalidateQueries(['bets']);
+      await queryClient.invalidateQueries(['bet', selectedBetId]); // Invalidate the specific bet too
+      toast.success('✅ Status atualizado!');
+    } catch (error) {
+      toast.error('❌ Erro ao atualizar status');
+      console.error('Erro ao atualizar status:', error);
+    }
+  };
+
+  const getWalletDisplayName = (walletId) => {
+    const wallet = wallets.find(w => w.id === walletId);
+    if (!wallet) return 'Conta Desconhecida';
+    
+    if (wallet.is_main_account) return wallet.name || 'Minha Conta Principal';
+    
+    return wallet.name || 'Conta';
+  };
+
+  const getBookmakerName = (bookmakerId) => {
+    const bookmaker = bookmakers.find(b => b.id === bookmakerId);
+    return bookmaker?.name || 'Casa Desconhecida';
+  };
+
+  const getProfileColor = (walletId) => {
+    const wallet = wallets.find(w => w.id === walletId);
+    if (!wallet) return '#3b82f6';
+    
+    if (wallet.is_main_account) return '#3b82f6';
+    
+    if (wallet.profile_id) {
+      const profile = profiles.find(p => p.id === wallet.profile_id);
+      return profile?.color || '#8b5cf6';
+    }
+    
+    return '#8b5cf6';
+  };
+
+  const getBetDisplayInfo = (bet) => {
+    const [bookmakerId, walletId] = bet.bookmaker_id?.split('_') || [];
+    return {
+      bookmakerName: getBookmakerName(bookmakerId),
+      walletName: getWalletDisplayName(walletId),
+      color: getProfileColor(walletId),
+      walletId,
+      bookmakerId
+    };
+  };
+
+  // 🎯 HANDLER PARA ADICIONAR MAIS CONTAS VIA IA
+  const handleAIAddAccounts = async (importData) => {
+    try {
+      const { accounts } = importData; // distributedData is not used here but could be if needed
+      
+      // Adicionar as novas contas à lista de múltiplas contas
+      const newWalletIds = accounts.map(acc => acc.wallet_id).filter(Boolean);
+      const updatedSelectedWallets = [...new Set([...formData.selectedWallets, ...newWalletIds])];
+      
+      setFormData(prev => ({
+        ...prev,
+        selectedWallets: updatedSelectedWallets
+      }));
+      
+      toast.success(`✅ ${accounts.length} ${accounts.length === 1 ? 'conta adicionada' : 'contas adicionadas'}!`);
+      setAiUploadOpen(false);
+    } catch (error) {
+      console.error('Erro ao adicionar contas:', error);
+      toast.error('Erro ao adicionar contas via IA');
+    }
+  };
+
+  if (!betId) {
+    return (
+      <div className="min-h-screen bg-slate-900 p-8 flex items-center justify-center">
+        <Alert className="max-w-lg bg-red-900/20 border-red-700">
+          <AlertCircle className="w-5 h-5 text-red-400" />
+          <AlertDescription className="text-red-200">
+            Nenhuma aposta selecionada para editar.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  const isLoading = loadingMainBet || loadingAllBets || loadingSelectedBet;
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 p-8 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+      </div>
+    );
+  }
+
+  // Placeholder variables for SuperOddAccountSelector to prevent errors.
+  // These are not directly supported by EditBetPage's current logic.
+  const includeMainAccount = false; 
+  const selectedProfiles = [];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+      <div className="w-full p-6 max-w-7xl mx-auto">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-3xl font-bold text-white">Editar Aposta</h1>
+            <p className="text-slate-400 mt-1">Selecione a conta/casa e atualize as informações</p>
+          </div>
+          <Button
+            variant="ghost"
+            onClick={() => navigate(createPageUrl('Bets'))}
+            className="text-slate-400 hover:text-white"
+          >
+            <X className="w-5 h-5" />
+          </Button>
+        </div>
+
+        {/* SELETOR DE CONTA/CASA */}
+        {relatedBets.length > 1 && (
+          <Card className="bg-gradient-to-r from-blue-900/20 to-purple-900/20 border-blue-700 mb-6">
+            <CardHeader>
+              <CardTitle className="text-white flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-blue-400" />
+                Selecione a Conta/Casa para Editar
+              </CardTitle>
+              <p className="text-slate-400 text-sm">
+                Esta aposta foi feita em {relatedBets.length} conta{relatedBets.length > 1 ? 's' : ''} diferentes
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {relatedBets.map((bet) => {
+                  const info = getBetDisplayInfo(bet);
+                  const isSelected = bet.id === selectedBetId;
+                  
+                  return (
+                    <button
+                      key={bet.id}
+                      type="button"
+                      onClick={() => setSelectedBetId(bet.id)}
+                      className={cn(
+                        "p-4 rounded-lg border-2 transition-all text-left",
+                        isSelected
+                          ? "bg-blue-900/30 border-blue-500 shadow-lg"
+                          : "bg-slate-800/50 border-slate-700 hover:border-slate-600"
+                      )}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="w-3 h-3 rounded-full border-2 border-slate-600"
+                            style={{ 
+                              backgroundColor: info.color,
+                              boxShadow: `0 0 8px ${info.color}60`
+                            }}
+                          />
+                          <span className="text-white font-medium">
+                            {info.bookmakerName}
+                          </span>
+                        </div>
+                        {isSelected && (
+                          <CheckCircle2 className="w-5 h-5 text-blue-400" />
+                        )}
+                      </div>
+                      
+                      <div className="text-sm text-slate-400">
+                        {info.walletName}
+                      </div>
+                      
+                      <div className="flex items-center gap-2 mt-2">
+                        <Badge variant="outline" className="text-xs">
+                          R$ {(bet.stake || 0).toFixed(2)}
+                        </Badge>
+                        {bet.is_freebet && (
+                          <Badge className="bg-pink-900/30 border-pink-700 text-pink-300 text-xs">
+                            🎁 Freebet
+                          </Badge>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* FORMULÁRIO DE EDIÇÃO */}
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* INFORMAÇÕES DO EVENTO */}
+          <Card className="bg-slate-800 border-slate-700">
+            <CardHeader>
+              <CardTitle className="text-white">Informações do Evento</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label className="text-white">Evento / Jogo *</Label>
+                <Input
+                  value={formData.event_name}
+                  onChange={(e) => setFormData({ ...formData, event_name: e.target.value })}
+                  placeholder="Ex: Flamengo vs Palmeiras"
+                  required
+                  className="bg-slate-900 border-slate-700 text-white"
+                />
+              </div>
+
+              <div>
+                <Label className="text-white">Data do Evento *</Label>
+                <Input
+                  type="datetime-local"
+                  value={formData.event_date}
+                  onChange={(e) => setFormData({ ...formData, event_date: e.target.value })}
+                  required
+                  className="bg-slate-900 border-slate-700 text-white"
+                />
+              </div>
+
+              <BookmakerSelector
+                value={formData.bookmaker_combo_id}
+                onChange={(comboId) => {
+                  setFormData({ ...formData, bookmaker_combo_id: comboId });
+                }}
+                wallets={wallets}
+                bookmakers={bookmakers}
+                profiles={profiles}
+                required
+                label="Casa de Apostas (desta conta específica) *"
+              />
+            </CardContent>
+          </Card>
+
+          {/* DETALHES DA APOSTA */}
+          <Card className="bg-slate-800 border-slate-700">
+            <CardHeader>
+              <CardTitle className="text-white">Detalhes da Aposta</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-white">Mercado *</Label>
+                  <Input
+                    value={formData.market}
+                    onChange={(e) => setFormData({ ...formData, market: e.target.value })}
+                    placeholder="Ex: Resultado Final"
+                    required
+                    className="bg-slate-900 border-slate-700 text-white"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-white">Seleção *</Label>
+                  <Input
+                    value={formData.selection}
+                    onChange={(e) => setFormData({ ...formData, selection: e.target.value })}
+                    placeholder="Ex: Time Casa"
+                    required
+                    className="bg-slate-900 border-slate-700 text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-white">Valor Apostado (R$) *</Label>
+                  <CurrencyInput
+                    value={formData.stake}
+                    onChange={(value) => setFormData({ ...formData, stake: value })}
+                    placeholder="0,00"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-white">Odd *</Label>
+                  <OddsInput
+                    value={formData.odds}
+                    onChange={(value) => setFormData({ ...formData, odds: value })}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="is_freebet"
+                  checked={formData.is_freebet}
+                  onCheckedChange={(checked) => setFormData({ ...formData, is_freebet: checked })}
+                />
+                <Label htmlFor="is_freebet" className="text-white cursor-pointer">
+                  🎁 Esta é uma Freebet / Giros Grátis
+                </Label>
+              </div>
+
+              <div>
+                <Label className="text-white">Observações</Label>
+                <textarea
+                  value={formData.notes}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  placeholder="Adicione observações sobre esta aposta..."
+                  className="w-full min-h-[100px] px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-white placeholder:text-slate-500"
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* MÚLTIPLAS CONTAS - COM OPÇÃO DE ADICIONAR VIA IA */}
+          {formData.procedure_type === 'superodd' && (
+            <Card className="bg-slate-800/50 border-slate-700">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <Users className="w-5 h-5 text-purple-400" />
+                    Múltiplas Contas
+                  </CardTitle>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setAiUploadOpen(true)}
+                    className="bg-gradient-to-r from-purple-600 to-pink-600"
+                  >
+                    <Sparkles className="w-3 h-3 mr-1" />
+                    Adicionar via IA
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <SuperOddAccountSelector
+                  selectedWallets={formData.selectedWallets}
+                  onWalletsChange={(wallets) => setFormData({ ...formData, selectedWallets: wallets })}
+                  wallets={wallets}
+                  profiles={profiles}
+                  includeMainAccount={includeMainAccount}
+                  selectedProfiles={selectedProfiles}
+                />
+              </CardContent>
+            </Card>
+          )}
+
+          {/* AÇÕES */}
+          <div className="flex gap-3 justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate(createPageUrl('Bets'))}
+              disabled={isSubmitting}
+              className="bg-slate-800 border-slate-700 text-white"
+            >
+              <X className="w-4 h-4 mr-2" />
+              Cancelar
+            </Button>
+            <Button
+              type="submit"
+              disabled={isSubmitting}
+              className="bg-gradient-to-r from-blue-600 to-blue-500"
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Salvando...
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4 mr-2" />
+                  Salvar Alterações
+                </>
+              )}
+            </Button>
+          </div>
+        </form>
+
+        {/* DIALOG DE IA PARA ADICIONAR CONTAS */}
+        <AIUploadDialog
+          isOpen={aiUploadOpen}
+          onClose={() => setAiUploadOpen(false)}
+          onSave={handleAIAddAccounts}
+        />
+      </div>
+    </div>
+  );
+}
