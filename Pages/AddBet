@@ -1,0 +1,1133 @@
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useNavigate } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { base44 } from "@/api/base44Client";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
+import {
+  ArrowLeft,
+  Save,
+  DollarSign,
+  TrendingUp,
+  Target,
+  Shield,
+  Trophy,
+  Gift,
+  Info,
+  Percent,
+  RefreshCw,
+  Wallet,
+  FileText,
+  Plus,
+  Trash2,
+  ShieldAlert,
+  Sparkles,
+  Users,
+  Copy,
+  Zap,
+  ToggleLeft,
+  ToggleRight,
+  Layers,
+  Check,
+  ChevronDown
+} from "lucide-react";
+
+// Componentes customizados
+import EventSearchInput from "../components/bets/EventSearchInput";
+import BookmakerSearchSelect from "../components/bets/BookmakerSearchSelect";
+import GlobalErrorBoundary from "../components/utils/GlobalErrorBoundary";
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ADD BET PAGE - NOVA APOSTA COM INTELIGENCIA DE PROMOCOES
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * FUNCIONALIDADES:
+ * 1. Novos tipos de procedimento (Chance de Duplo, Procedimento Freebet)
+ * 2. Selecao de Freebet ativa para extracao
+ * 3. Campo de mercado nas protecoes (INPUT LIVRE)
+ * 4. Sistema de multiplas contas (MULTI-SELECT COM CHECKLIST)
+ * 5. Toggle para protecoes em contas/casas diferentes
+ * 6. Busca rapida de casas de apostas
+ * 7. CORRECAO CRITICA: Dropdowns com overflow corrigido
+ */
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ESTILOS REUTILIZAVEIS - CORRECAO CRITICA DE DROPDOWNS
+// ═══════════════════════════════════════════════════════════════════════════
+
+const inputStyles = "bg-slate-800/60 border border-slate-600/50 text-white placeholder:text-slate-500 h-12 rounded-xl focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/50 focus:outline-none transition-all duration-200";
+
+const selectTriggerStyles = `
+  bg-slate-800/60 border border-slate-600/50 text-white h-12 rounded-xl
+  flex items-center justify-between px-3
+  hover:bg-slate-700/60 hover:border-slate-500/50
+  focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/50 focus:outline-none
+  data-[placeholder]:text-slate-500
+  transition-all duration-200
+  [&>span]:truncate [&>span]:flex-1 [&>span]:text-left
+  [&>svg]:w-4 [&>svg]:h-4 [&>svg]:text-slate-400 [&>svg]:shrink-0 [&>svg]:ml-2
+`.replace(/\s+/g, ' ').trim();
+
+/**
+ * FIX CRITICO DE USABILIDADE DO DROPDOWN
+ * ════════════════════════════════════════════════════════════════════════════
+ * CORRECOES APLICADAS:
+ * 1. z-[99999]: Z-index extremamente alto para SEMPRE sobrepor
+ * 2. !overflow-visible nos pais: Ignora overflow:hidden de containers
+ * 3. Porta via Radix: Renderiza fora da hierarquia DOM
+ * 4. min-h-[220px]: Garante espaco para MINIMO 5 opcoes visiveis
+ * 5. max-h-[308px]: Limita altura para ~7 opcoes com scroll suave
+ * 6. overscroll-contain: Previne scroll do body
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+const selectContentStyles = `
+  bg-slate-800 border border-slate-600/50 rounded-xl
+  shadow-2xl shadow-black/70
+  z-[99999]
+  min-h-[220px] max-h-[308px]
+  overflow-y-auto overflow-x-hidden overscroll-contain
+  animate-in fade-in-0 zoom-in-95
+  data-[side=bottom]:slide-in-from-top-2
+  data-[side=top]:slide-in-from-bottom-2
+  [&::-webkit-scrollbar]:w-2
+  [&::-webkit-scrollbar-track]:bg-slate-900/50
+  [&::-webkit-scrollbar-thumb]:bg-slate-600
+  [&::-webkit-scrollbar-thumb]:rounded-full
+`.replace(/\s+/g, ' ').trim();
+
+const selectItemStyles = `
+  text-white text-sm
+  hover:bg-slate-700/80 focus:bg-slate-700/80
+  rounded-lg mx-1 my-0.5 px-3 py-2.5
+  cursor-pointer outline-none
+  data-[highlighted]:bg-slate-700/80
+  transition-colors duration-150
+`.replace(/\s+/g, ' ').trim();
+
+const labelStyles = "text-slate-200 text-sm font-medium flex items-center gap-2 mb-2.5";
+const cardStyles = "bg-slate-800/40 border-slate-700/30 backdrop-blur-sm rounded-2xl";
+
+export default function AddBetPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [currentUser, setCurrentUser] = useState(null);
+  const [userEmail, setUserEmail] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Estado para multiplas contas - AGORA COM MULTI-SELECT
+  const [multiAccountEnabled, setMultiAccountEnabled] = useState(false);
+  const [selectedWalletIds, setSelectedWalletIds] = useState([]);
+
+  // Toggle para protecoes em contas diferentes
+  const [protectionMultiMode, setProtectionMultiMode] = useState(false);
+
+  const [formData, setFormData] = useState({
+    amount: "",
+    odd: "",
+    bet_type: "simple",
+    status: "pending",
+    event_date: "",
+    event_name: "",
+    market: "",
+    description: "",
+    notes: "",
+    main_wallet_id: "",
+    main_bookmaker_id: "",
+    procedure_type: "",
+    is_freebet: false,
+    freebet_type: "extraction",
+    freebet_promotion_id: null,
+    protection_bookmakers: [],
+    additional_bets: []
+  });
+
+  // Queries
+  const { data: wallets = [], isLoading: walletsLoading } = useQuery({
+    queryKey: ['wallets', userEmail],
+    queryFn: async () => {
+      if (!userEmail) return [];
+      const data = await base44.entities.Wallet.filter({ created_by: userEmail, is_active: true });
+      return data.map((w) => ({
+        ...w,
+        bookmaker_balances: w.bookmaker_balances || {},
+        bank_balance: typeof w.bank_balance === 'number' ? w.bank_balance : 0
+      }));
+    },
+    enabled: !!userEmail,
+    staleTime: 3 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false
+  });
+
+  const { data: allBookmakersFromDB = [], isLoading: bookmakersLoading } = useQuery({
+    queryKey: ['bookmakers'],
+    queryFn: async () => {
+      const data = await base44.entities.Bookmaker.list();
+      return data.filter((b) => b.is_active !== false).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    },
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    retry: 3
+  });
+
+  // Casas vinculadas às contas do usuário
+  const userLinkedBookmakerIds = useMemo(() => {
+    const ids = new Set();
+    wallets.forEach(wallet => {
+      (wallet.bookmaker_ids || []).forEach(id => ids.add(id));
+    });
+    return ids;
+  }, [wallets]);
+
+  // FILTRAR: apenas casas vinculadas às contas do usuário
+  const bookmakers = useMemo(() => {
+    return allBookmakersFromDB.filter(b => userLinkedBookmakerIds.has(b.id));
+  }, [allBookmakersFromDB, userLinkedBookmakerIds]);
+
+  // Query para freebets ativas (para extracao)
+  const { data: activeFreebets = [] } = useQuery({
+    queryKey: ['promotions-freebets'],
+    queryFn: async () => {
+      const data = await base44.entities.Promotion.list();
+      return data.filter(p =>
+        p.type === 'freebet' &&
+        p.is_active &&
+        p.extraction_status !== 'extraida' &&
+        (!p.end_date || new Date(p.end_date) >= new Date())
+      );
+    },
+    staleTime: 2 * 60 * 1000
+  });
+
+  const isLoadingData = walletsLoading || bookmakersLoading || !userEmail;
+
+  useEffect(() => {
+    loadUser();
+  }, []);
+
+  const loadUser = async () => {
+    try {
+      const user = await base44.auth.me();
+      setCurrentUser(user);
+      setUserEmail(user?.email);
+    } catch (error) {
+      console.error('Erro ao carregar usuario:', error);
+      toast.error('Erro ao carregar dados do usuario');
+    }
+  };
+
+  const createBetMutation = useMutation({
+    mutationFn: async (betData) => {
+      return await base44.entities.Bet.create(betData);
+    },
+    onSuccess: async (data) => {
+      queryClient.setQueryData(['bets', userEmail], (old) => {
+        if (!old) return [data];
+        return [...old, data];
+      });
+      await queryClient.invalidateQueries({ queryKey: ['bets'] });
+      await queryClient.invalidateQueries({ queryKey: ['wallets'] });
+      await queryClient.invalidateQueries({ queryKey: ['promotions-freebets'] });
+    }
+  });
+
+  const addProtection = () => {
+    setFormData({
+      ...formData,
+      protection_bookmakers: [...formData.protection_bookmakers, {
+        id: Date.now(),
+        wallet_id: "", // Sempre comeca vazio para o usuario selecionar
+        bookmaker_id: "",
+        amount: "",
+        odd: "",
+        market: ""
+      }]
+    });
+  };
+
+  const addAdditionalBet = () => {
+    setFormData({
+      ...formData,
+      additional_bets: [...formData.additional_bets, {
+        id: Date.now(),
+        wallet_id: "",
+        bookmaker_id: "",
+        amount: "",
+        odd: "",
+        market: ""
+      }]
+    });
+  };
+
+  const removeProtection = (id) => {
+    setFormData({
+      ...formData,
+      protection_bookmakers: formData.protection_bookmakers.filter((p) => p.id !== id)
+    });
+  };
+
+  const removeAdditionalBet = (id) => {
+    setFormData({
+      ...formData,
+      additional_bets: formData.additional_bets.filter((b) => b.id !== id)
+    });
+  };
+
+  const updateProtection = (id, field, value) => {
+    setFormData({
+      ...formData,
+      protection_bookmakers: formData.protection_bookmakers.map((p) =>
+        p.id === id ? { ...p, [field]: value } : p
+      )
+    });
+  };
+
+  const updateAdditionalBet = (id, field, value) => {
+    setFormData({
+      ...formData,
+      additional_bets: formData.additional_bets.map((b) =>
+        b.id === id ? { ...b, [field]: value } : b
+      )
+    });
+  };
+
+  const handleEventSelect = (eventName, eventData) => {
+    setFormData({
+      ...formData,
+      event_name: eventName,
+      event_date: eventData?.date || formData.event_date
+    });
+  };
+
+  // Handler para mudanca de procedimento
+  const handleProcedureChange = (value) => {
+    setFormData({
+      ...formData,
+      procedure_type: value,
+      freebet_promotion_id: null // Reset freebet selection
+    });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+
+    try {
+      // Validacao para modo multi-conta
+      if (multiAccountEnabled) {
+        if (selectedWalletIds.length === 0) {
+          toast.error("Selecione pelo menos uma conta");
+          setIsSubmitting(false);
+          return;
+        }
+      } else {
+        if (!formData.main_wallet_id) {
+          toast.error("Selecione uma conta");
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
+      if (!formData.main_bookmaker_id) {
+        toast.error("Selecione uma casa de apostas");
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!formData.amount || parseFloat(formData.amount) <= 0) {
+        toast.error("Valor da aposta invalido");
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!formData.odd || parseFloat(formData.odd) <= 0) {
+        toast.error("Odd invalida");
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Validar freebet selecionada para extracao
+      if (formData.procedure_type === 'extracao_freebet' && !formData.freebet_promotion_id) {
+        toast.error("Selecione uma Freebet para extrair");
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Multiplicador baseado nas contas selecionadas
+      const multiplier = multiAccountEnabled ? selectedWalletIds.length : 1;
+      const primaryWalletId = multiAccountEnabled ? selectedWalletIds[0] : formData.main_wallet_id;
+      const wallet = wallets.find(w => w.id === primaryWalletId);
+
+      const finalStake = parseFloat(formData.amount) * multiplier;
+
+      const betData = {
+        stake: finalStake,
+        odds: parseFloat(formData.odd),
+        bet_type: formData.bet_type || "simple",
+        status: formData.status || "pending",
+        event_date: formData.event_date || null,
+        event_name: formData.event_name || "",
+        market: formData.market || "",
+        notes: formData.notes || "",
+        procedure_type: formData.procedure_type || "normal",
+        wallet_id: primaryWalletId,
+        wallet_name: wallet?.name || 'Conta',
+        bookmaker_id: formData.main_bookmaker_id,
+        bookmaker_name: bookmakers.find(b => b.id === formData.main_bookmaker_id)?.name || '',
+        freebet_promotion_id: formData.freebet_promotion_id,
+        account_count: multiplier,
+        selected_wallet_ids: multiAccountEnabled ? selectedWalletIds : [formData.main_wallet_id],
+        protection_bookmakers: formData.protection_bookmakers.map((p) => ({
+          wallet_id: p.wallet_id || primaryWalletId,
+          bookmaker_id: p.bookmaker_id,
+          stake: parseFloat(p.amount) * multiplier,
+          odds: parseFloat(p.odd),
+          market: p.market || ""
+        })),
+        additional_bets: formData.additional_bets.map((a) => ({
+          wallet_id: a.wallet_id,
+          bookmaker_id: a.bookmaker_id,
+          stake: parseFloat(a.amount) * multiplier,
+          odds: parseFloat(a.odd),
+          market: a.market || ""
+        })),
+        created_by: userEmail
+      };
+
+      await createBetMutation.mutateAsync(betData);
+
+      // Se for extracao de freebet, marcar como pendente
+      if (formData.procedure_type === 'extracao_freebet' && formData.freebet_promotion_id) {
+        try {
+          await base44.entities.Promotion.update(formData.freebet_promotion_id, {
+            extraction_status: 'pendente'
+          });
+        } catch (err) {
+          console.warn('Nao foi possivel atualizar status da freebet:', err);
+        }
+      }
+
+      toast.success("Aposta criada com sucesso!");
+      navigate("/Bets");
+    } catch (error) {
+      console.error("Erro ao criar aposta:", error);
+      toast.error("Erro ao criar aposta");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Calculos com multiplicador baseado em contas selecionadas
+  const multiplier = multiAccountEnabled ? selectedWalletIds.length : 1;
+
+  const totalInvestment = useMemo(() => {
+    let total = parseFloat(formData.amount) || 0;
+    formData.protection_bookmakers.forEach(p => { total += parseFloat(p.amount) || 0; });
+    formData.additional_bets.forEach(a => { total += parseFloat(a.amount) || 0; });
+    return total * multiplier;
+  }, [formData.amount, formData.protection_bookmakers, formData.additional_bets, multiplier]);
+
+  const potentialReturn = useMemo(() => {
+    return (parseFloat(formData.amount) || 0) * (parseFloat(formData.odd) || 0) * multiplier;
+  }, [formData.amount, formData.odd, multiplier]);
+
+  const potentialProfit = potentialReturn - totalInvestment;
+
+  // Helper para obter nome do bookmaker de uma freebet
+  const getBookmakerName = (bookmakerId) => {
+    return bookmakers.find(b => b.id === bookmakerId)?.name || 'Casa desconhecida';
+  };
+
+  return (
+    <GlobalErrorBoundary>
+      <div className="min-h-screen w-full bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+        <div className="p-4 md:p-6 lg:p-8 pb-24">
+
+          {/* Header */}
+          <div className="mb-8 flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/Bets")}
+              className="text-slate-400 hover:text-white hover:bg-slate-800/60 rounded-xl"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            <div>
+              <h1 className="text-2xl md:text-3xl font-bold text-white">Nova Aposta</h1>
+              <p className="text-slate-400 text-sm mt-0.5">Registre uma nova operacao</p>
+            </div>
+          </div>
+
+          <div className="max-w-[1100px] mx-auto">
+            <form onSubmit={handleSubmit} className="space-y-6">
+
+              {/* Card Principal */}
+              <Card className={cardStyles}>
+                <CardHeader className="pb-4">
+                  <CardTitle className="text-white flex items-center gap-2.5 text-lg">
+                    <div className="p-2 bg-blue-500/20 rounded-lg">
+                      <Trophy className="w-5 h-5 text-blue-400" />
+                    </div>
+                    Aposta Principal
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-6">
+
+                  {/* Procedimento | Observacao */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <div>
+                      <Label className={labelStyles}>
+                        <Target className="w-4 h-4 text-blue-400" />
+                        Tipo de Procedimento
+                      </Label>
+                      <Select
+                        value={formData.procedure_type}
+                        onValueChange={handleProcedureChange}
+                      >
+                        <SelectTrigger className={selectTriggerStyles}>
+                          <SelectValue placeholder="Selecione..." />
+                        </SelectTrigger>
+                        <SelectContent className={selectContentStyles} position="popper" sideOffset={4}>
+                          <SelectItem value="normal" className={selectItemStyles}>
+                            <div className="flex items-center gap-2 py-0.5">
+                              <Target className="w-4 h-4 text-slate-400" />
+                              Aposta Normal
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="arbitrage" className={selectItemStyles}>
+                            <div className="flex items-center gap-2 py-0.5">
+                              <TrendingUp className="w-4 h-4 text-green-400" />
+                              Arbitragem
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="chance_duplo" className={selectItemStyles}>
+                            <div className="flex items-center gap-2 py-0.5">
+                              <Copy className="w-4 h-4 text-cyan-400" />
+                              Chance de Duplo
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="procedimento_freebet" className={selectItemStyles}>
+                            <div className="flex items-center gap-2 py-0.5">
+                              <Zap className="w-4 h-4 text-orange-400" />
+                              Procedimento Freebet
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="extracao_freebet" className={selectItemStyles}>
+                            <div className="flex items-center gap-2 py-0.5">
+                              <Gift className="w-4 h-4 text-purple-400" />
+                              Extracao Freebet
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="rodadas_gratis" className={selectItemStyles}>
+                            <div className="flex items-center gap-2 py-0.5">
+                              <Sparkles className="w-4 h-4 text-yellow-400" />
+                              Rodadas Gratis
+                            </div>
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Label className={labelStyles}>
+                        <FileText className="w-4 h-4 text-slate-400" />
+                        Observacao
+                      </Label>
+                      <Input
+                        type="text"
+                        value={formData.notes}
+                        onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                        placeholder="Notas sobre a aposta..."
+                        className={inputStyles}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Selecao de Freebet para Extracao */}
+                  {formData.procedure_type === 'extracao_freebet' && (
+                    <div className="p-4 bg-purple-900/20 border border-purple-700/40 rounded-xl space-y-4">
+                      <div className="flex items-center gap-2">
+                        <Gift className="w-5 h-5 text-purple-400" />
+                        <span className="text-purple-300 font-medium">Selecione a Freebet para Extrair</span>
+                      </div>
+
+                      {activeFreebets.length === 0 ? (
+                        <div className="text-center py-4 text-slate-400">
+                          <Gift className="w-8 h-8 mx-auto mb-2 text-slate-500" />
+                          <p className="text-sm">Nenhuma freebet disponivel</p>
+                          <p className="text-xs text-slate-500 mt-1">Adicione freebets na pagina de Promocoes</p>
+                        </div>
+                      ) : (
+                        <Select
+                          value={formData.freebet_promotion_id?.toString() || ""}
+                          onValueChange={(v) => setFormData({ ...formData, freebet_promotion_id: parseInt(v) })}
+                        >
+                          <SelectTrigger className={selectTriggerStyles}>
+                            <SelectValue placeholder="Selecione a freebet..." />
+                          </SelectTrigger>
+                          <SelectContent className={selectContentStyles} position="popper" sideOffset={4}>
+                            {activeFreebets.map((fb) => (
+                              <SelectItem key={fb.id} value={fb.id.toString()} className={selectItemStyles}>
+                                <div className="flex items-center justify-between w-full gap-2">
+                                  <span className="truncate">{fb.title || `Freebet ${getBookmakerName(fb.bookmaker_id)}`}</span>
+                                  <Badge className="bg-green-600/20 text-green-400 text-xs shrink-0">
+                                    R$ {(fb.reward_value || 0).toFixed(2)}
+                                  </Badge>
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Info sobre Procedimento Freebet */}
+                  {formData.procedure_type === 'procedimento_freebet' && (
+                    <div className="p-4 bg-orange-900/20 border border-orange-700/40 rounded-xl">
+                      <div className="flex items-start gap-3">
+                        <Zap className="w-5 h-5 text-orange-400 mt-0.5" />
+                        <div>
+                          <p className="text-orange-300 font-medium text-sm">Procedimento Freebet Inteligente</p>
+                          <p className="text-slate-400 text-xs mt-1">
+                            Se a aposta principal PERDER, uma freebet sera adicionada automaticamente.
+                            Se GANHAR, o sistema reconhece que a freebet nao sera gerada.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Evento | Mercado (INPUT LIVRE) */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <EventSearchInput
+                      value={formData.event_name}
+                      onChange={handleEventSelect}
+                      placeholder="Pesquise: Flamengo, Real Madrid..."
+                      label="Evento"
+                    />
+
+                    <div>
+                      <Label className={labelStyles}>
+                        <Target className="w-4 h-4 text-purple-400" />
+                        Mercado
+                      </Label>
+                      <Input
+                        type="text"
+                        value={formData.market}
+                        onChange={(e) => setFormData({ ...formData, market: e.target.value })}
+                        placeholder="Ex: Resultado Final, Over 2.5, Ambas Marcam Sim..."
+                        className={inputStyles}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Conta | Casa */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <div>
+                      <Label className={labelStyles}>
+                        <Wallet className="w-4 h-4 text-green-400" />
+                        Conta <span className="text-red-400">*</span>
+                      </Label>
+                      {walletsLoading ? (
+                        <Skeleton className="h-12 w-full bg-slate-800/50 rounded-xl" />
+                      ) : multiAccountEnabled ? (
+                        // Multi-select desabilitado no modo single
+                        <div className="h-12 bg-slate-800/40 border border-slate-600/30 rounded-xl flex items-center px-3 text-slate-500">
+                          <Users className="w-4 h-4 mr-2" />
+                          Usando multi-contas abaixo
+                        </div>
+                      ) : (
+                        <Select
+                          value={formData.main_wallet_id?.toString() || ""}
+                          onValueChange={(v) => setFormData({ ...formData, main_wallet_id: parseInt(v) })}
+                        >
+                          <SelectTrigger className={selectTriggerStyles}>
+                            <SelectValue placeholder="Selecione a conta..." />
+                          </SelectTrigger>
+                          <SelectContent className={selectContentStyles} position="popper" sideOffset={4}>
+                            {wallets.map((wallet) => (
+                              <SelectItem key={wallet.id} value={wallet.id.toString()} className={selectItemStyles}>
+                                <div className="flex items-center gap-2">
+                                  <span>{wallet.is_main_account ? "🏠" : "👤"}</span>
+                                  <span>{wallet.name}</span>
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </div>
+
+                    <div>
+                      <Label className={labelStyles}>
+                        <Shield className="w-4 h-4 text-blue-400" />
+                        Casa de Apostas <span className="text-red-400">*</span>
+                      </Label>
+                      {bookmakersLoading ? (
+                        <Skeleton className="h-12 w-full bg-slate-800/50 rounded-xl" />
+                      ) : (
+                        <BookmakerSearchSelect
+                          value={formData.main_bookmaker_id?.toString() || ""}
+                          onValueChange={(v) => setFormData({ ...formData, main_bookmaker_id: parseInt(v) })}
+                          bookmakers={formData.main_wallet_id || (multiAccountEnabled && selectedWalletIds.length > 0) 
+                            ? allBookmakersFromDB.filter(bm => {
+                                const targetWalletId = multiAccountEnabled ? selectedWalletIds[0] : formData.main_wallet_id;
+                                const wallet = wallets.find(w => w.id === targetWalletId);
+                                return wallet?.bookmaker_ids?.includes(bm.id);
+                              }) 
+                            : bookmakers}
+                          placeholder="Buscar casa..."
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Valor | Odd */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <div>
+                      <Label className={labelStyles}>
+                        <DollarSign className="w-4 h-4 text-green-400" />
+                        Valor da Aposta <span className="text-red-400">*</span>
+                      </Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={formData.amount}
+                        onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                        placeholder="0.00"
+                        required
+                        className={inputStyles}
+                      />
+                    </div>
+
+                    <div>
+                      <Label className={labelStyles}>
+                        <Percent className="w-4 h-4 text-purple-400" />
+                        Odd <span className="text-red-400">*</span>
+                      </Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={formData.odd}
+                        onChange={(e) => setFormData({ ...formData, odd: e.target.value })}
+                        placeholder="1.50"
+                        required
+                        className={inputStyles}
+                      />
+                    </div>
+                  </div>
+
+                  {/* ═══════════════════════════════════════════════════════════════
+                      SISTEMA DE MULTIPLAS CONTAS - MULTI-SELECT COM CHECKLIST
+                      ═══════════════════════════════════════════════════════════════ */}
+                  <div className="p-4 bg-gradient-to-r from-cyan-900/20 to-blue-900/20 border border-cyan-700/40 rounded-xl">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 bg-cyan-500/20 rounded-lg">
+                          <Users className="w-5 h-5 text-cyan-400" />
+                        </div>
+                        <div>
+                          <p className="text-cyan-300 font-medium text-sm">Multiplas Contas</p>
+                          <p className="text-slate-400 text-xs">Selecione as contas para replicar a aposta</p>
+                        </div>
+                      </div>
+                      <Switch
+                        checked={multiAccountEnabled}
+                        onCheckedChange={(checked) => {
+                          setMultiAccountEnabled(checked);
+                          if (!checked) {
+                            setSelectedWalletIds([]);
+                          }
+                        }}
+                        className="data-[state=checked]:bg-cyan-600"
+                      />
+                    </div>
+
+                    {multiAccountEnabled && (
+                      <div className="mt-4 pt-4 border-t border-cyan-700/30 space-y-4">
+                        <Label className="text-slate-300 text-sm flex items-center gap-2">
+                          <Wallet className="w-4 h-4 text-cyan-400" />
+                          Selecione as Contas:
+                        </Label>
+
+                        <div className="grid grid-cols-1 gap-2">
+                          {wallets.map((wallet) => {
+                            const isSelected = selectedWalletIds.includes(wallet.id);
+                            return (
+                              <button
+                                key={wallet.id}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setSelectedWalletIds(selectedWalletIds.filter(id => id !== wallet.id));
+                                  } else {
+                                    setSelectedWalletIds([...selectedWalletIds, wallet.id]);
+                                  }
+                                }}
+                                className={`
+                                  w-full flex items-center gap-3 px-4 py-3 rounded-lg
+                                  text-left transition-all duration-150
+                                  ${isSelected
+                                    ? 'bg-cyan-900/40 border-2 border-cyan-600'
+                                    : 'bg-slate-800/60 border-2 border-slate-600/50 hover:border-slate-500'
+                                  }
+                                `}
+                              >
+                                <Checkbox
+                                  checked={isSelected}
+                                  className="border-slate-500 data-[state=checked]:bg-cyan-600 data-[state=checked]:border-cyan-600 pointer-events-none"
+                                />
+                                <div className="flex items-center gap-2 flex-1">
+                                  <span className="text-lg">{wallet.is_main_account ? "🏠" : "👤"}</span>
+                                  <span className={`text-sm font-medium ${isSelected ? 'text-white' : 'text-slate-300'}`}>
+                                    {wallet.name}
+                                  </span>
+                                </div>
+                                {isSelected && (
+                                  <Check className="w-5 h-5 text-cyan-400" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {selectedWalletIds.length > 0 && (
+                          <div className="flex items-center justify-between pt-2">
+                            <div className="flex flex-wrap gap-2">
+                              {wallets
+                                .filter(w => selectedWalletIds.includes(w.id))
+                                .slice(0, 5)
+                                .map(w => (
+                                  <Badge
+                                    key={w.id}
+                                    className="bg-cyan-600/20 text-cyan-300 border-cyan-600/50 text-xs"
+                                  >
+                                    {w.is_main_account ? "🏠" : "👤"} {w.name}
+                                  </Badge>
+                                ))
+                              }
+                              {selectedWalletIds.length > 5 && (
+                                <Badge className="bg-slate-600/30 text-slate-400 text-xs">
+                                  +{selectedWalletIds.length - 5} mais
+                                </Badge>
+                              )}
+                            </div>
+                            <Badge className="bg-cyan-600/30 text-cyan-300 border-cyan-600/50">
+                              <Layers className="w-3 h-3 mr-1" />
+                              {selectedWalletIds.length}x Multiplicador
+                            </Badge>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Resumo */}
+                  {formData.amount && formData.odd && (
+                    <div className="p-4 bg-gradient-to-r from-blue-900/20 to-purple-900/20 border border-blue-700/30 rounded-xl">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <Info className="w-4 h-4 text-blue-400" />
+                          <span className="text-blue-300 text-sm font-medium">Resumo</span>
+                        </div>
+                        {multiAccountEnabled && selectedWalletIds.length > 0 && (
+                          <Badge className="bg-cyan-600/20 text-cyan-300 text-xs">
+                            {selectedWalletIds.length} conta{selectedWalletIds.length > 1 ? 's' : ''}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-3 gap-4 text-center">
+                        <div>
+                          <p className="text-slate-400 text-xs">Investimento Total</p>
+                          <p className="text-slate-200 font-semibold">R$ {totalInvestment.toFixed(2)}</p>
+                          {multiAccountEnabled && selectedWalletIds.length > 1 && (
+                            <p className="text-slate-500 text-xs">(R$ {(parseFloat(formData.amount) || 0).toFixed(2)} x {selectedWalletIds.length})</p>
+                          )}
+                        </div>
+                        <div>
+                          <p className="text-slate-400 text-xs">Retorno Total</p>
+                          <p className="text-blue-300 font-semibold">R$ {potentialReturn.toFixed(2)}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-400 text-xs">Lucro Total</p>
+                          <p className={`font-bold ${potentialProfit > 0 ? "text-green-400" : "text-red-400"}`}>
+                            {potentialProfit > 0 ? '+' : ''}R$ {potentialProfit.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                </CardContent>
+              </Card>
+
+              {/* ═══════════════════════════════════════════════════════════════
+                  CARD PROTECOES - COM SELECAO DE CONTA E MERCADO LIVRE
+                  ═══════════════════════════════════════════════════════════════ */}
+              <Card className={cardStyles}>
+                <CardHeader className="pb-4">
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <CardTitle className="text-white flex items-center gap-2.5 text-lg">
+                      <div className="p-2 bg-yellow-500/20 rounded-lg">
+                        <ShieldAlert className="w-5 h-5 text-yellow-400" />
+                      </div>
+                      Protecoes
+                      {formData.protection_bookmakers.length > 0 && (
+                        <Badge className="ml-2 bg-yellow-500/20 text-yellow-400 border-yellow-700/50">
+                          {formData.protection_bookmakers.length}
+                        </Badge>
+                      )}
+                    </CardTitle>
+                    <Button type="button" onClick={addProtection} size="sm" className="bg-yellow-600 hover:bg-yellow-500 text-white rounded-xl">
+                      <Plus className="w-4 h-4 mr-1.5" /> Adicionar
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {formData.protection_bookmakers.length === 0 ? (
+                    <div className="text-center py-10 text-slate-500">
+                      <ShieldAlert className="w-10 h-10 mx-auto mb-3 text-slate-600" />
+                      <p className="text-sm">Nenhuma protecao adicionada</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {formData.protection_bookmakers.map((p, i) => (
+                        <div key={p.id} className="p-4 bg-slate-900/40 border border-slate-700/30 rounded-xl space-y-4">
+                          <div className="flex items-center justify-between">
+                            <span className="text-white text-sm font-medium">Protecao {i + 1}</span>
+                            <Button type="button" variant="ghost" size="sm" onClick={() => removeProtection(p.id)} className="text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-lg">
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+
+                          {/* LINHA 1: Conta (SEMPRE VISIVEL) e Casa */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {/* SELECAO DE CONTA - SEMPRE VISIVEL NA PROTECAO */}
+                            <div>
+                              <Label className="text-slate-400 text-xs mb-1.5 flex items-center gap-1">
+                                <Wallet className="w-3 h-3" /> Conta da Protecao
+                              </Label>
+                              <Select
+                                value={p.wallet_id?.toString() || ""}
+                                onValueChange={(v) => updateProtection(p.id, "wallet_id", parseInt(v))}
+                              >
+                                <SelectTrigger className={selectTriggerStyles}>
+                                  <SelectValue placeholder="Selecione a conta..." />
+                                </SelectTrigger>
+                                <SelectContent className={selectContentStyles} position="popper" sideOffset={4}>
+                                  {wallets.map((w) => (
+                                    <SelectItem key={w.id} value={w.id.toString()} className={selectItemStyles}>
+                                      <div className="flex items-center gap-2">
+                                        <span>{w.is_main_account ? "🏠" : "👤"}</span>
+                                        <span>{w.name}</span>
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            {/* Casa de apostas */}
+                            <div>
+                              <Label className="text-slate-400 text-xs mb-1.5 flex items-center gap-1">
+                                <Shield className="w-3 h-3" /> Casa de Apostas
+                              </Label>
+                              <BookmakerSearchSelect
+                                value={p.bookmaker_id?.toString() || ""}
+                                onValueChange={(v) => updateProtection(p.id, "bookmaker_id", parseInt(v))}
+                                bookmakers={p.wallet_id ? allBookmakersFromDB.filter(bm => {
+                                  const wallet = wallets.find(w => w.id === p.wallet_id);
+                                  return wallet?.bookmaker_ids?.includes(bm.id);
+                                }) : bookmakers}
+                                placeholder="Buscar casa..."
+                              />
+                            </div>
+                          </div>
+
+                          {/* LINHA 2: Mercado - INPUT LIVRE */}
+                          <div>
+                            <Label className="text-slate-400 text-xs mb-1.5 flex items-center gap-1">
+                              <Target className="w-3 h-3" /> Mercado
+                            </Label>
+                            <Input
+                              type="text"
+                              value={p.market || ""}
+                              onChange={(e) => updateProtection(p.id, "market", e.target.value)}
+                              placeholder="Ex: Ambas Marcam Sim, Placar Correto 2x1..."
+                              className={inputStyles}
+                            />
+                          </div>
+
+                          {/* LINHA 3: Valor e Odd */}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <Label className="text-slate-400 text-xs mb-1.5">Valor</Label>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={p.amount}
+                                onChange={(e) => updateProtection(p.id, "amount", e.target.value)}
+                                placeholder="0.00"
+                                className={inputStyles}
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-slate-400 text-xs mb-1.5">Odd</Label>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={p.odd}
+                                onChange={(e) => updateProtection(p.id, "odd", e.target.value)}
+                                placeholder="1.50"
+                                className={inputStyles}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Card Apostas Adicionais */}
+              <Card className={cardStyles}>
+                <CardHeader className="pb-4">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-white flex items-center gap-2.5 text-lg">
+                      <div className="p-2 bg-blue-500/20 rounded-lg">
+                        <Plus className="w-5 h-5 text-blue-400" />
+                      </div>
+                      Apostas Adicionais
+                      {formData.additional_bets.length > 0 && (
+                        <Badge className="ml-2 bg-blue-500/20 text-blue-400 border-blue-700/50">
+                          {formData.additional_bets.length}
+                        </Badge>
+                      )}
+                    </CardTitle>
+                    <Button type="button" onClick={addAdditionalBet} size="sm" className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl">
+                      <Plus className="w-4 h-4 mr-1.5" /> Adicionar
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {formData.additional_bets.length === 0 ? (
+                    <div className="text-center py-10 text-slate-500">
+                      <Plus className="w-10 h-10 mx-auto mb-3 text-slate-600" />
+                      <p className="text-sm">Nenhuma aposta adicional</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {formData.additional_bets.map((b, i) => (
+                        <div key={b.id} className="p-4 bg-slate-900/40 border border-slate-700/30 rounded-xl space-y-4">
+                          <div className="flex items-center justify-between">
+                            <span className="text-white text-sm font-medium">Adicional {i + 1}</span>
+                            <Button type="button" variant="ghost" size="sm" onClick={() => removeAdditionalBet(b.id)} className="text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-lg">
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+
+                          {/* Linha 1: Conta e Casa */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                              <Label className="text-slate-400 text-xs mb-1.5 flex items-center gap-1">
+                                <Wallet className="w-3 h-3" /> Conta
+                              </Label>
+                              <Select value={b.wallet_id?.toString() || ""} onValueChange={(v) => updateAdditionalBet(b.id, "wallet_id", parseInt(v))}>
+                                <SelectTrigger className={selectTriggerStyles}><SelectValue placeholder="Conta" /></SelectTrigger>
+                                <SelectContent className={selectContentStyles} position="popper" sideOffset={4}>
+                                  {wallets.map((w) => (
+                                    <SelectItem key={w.id} value={w.id.toString()} className={selectItemStyles}>
+                                      <div className="flex items-center gap-2">
+                                        <span>{w.is_main_account ? "🏠" : "👤"}</span>
+                                        <span>{w.name}</span>
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <Label className="text-slate-400 text-xs mb-1.5 flex items-center gap-1">
+                                <Shield className="w-3 h-3" /> Casa de Apostas
+                              </Label>
+                              <BookmakerSearchSelect
+                                value={b.bookmaker_id?.toString() || ""}
+                                onValueChange={(v) => updateAdditionalBet(b.id, "bookmaker_id", parseInt(v))}
+                                bookmakers={b.wallet_id ? allBookmakersFromDB.filter(bm => {
+                                  const wallet = wallets.find(w => w.id === b.wallet_id);
+                                  return wallet?.bookmaker_ids?.includes(bm.id);
+                                }) : bookmakers}
+                                placeholder="Buscar casa..."
+                              />
+                            </div>
+                          </div>
+
+                          {/* Linha 2: Mercado - INPUT LIVRE */}
+                          <div>
+                            <Label className="text-slate-400 text-xs mb-1.5 flex items-center gap-1">
+                              <Target className="w-3 h-3" /> Mercado
+                            </Label>
+                            <Input
+                              type="text"
+                              value={b.market || ""}
+                              onChange={(e) => updateAdditionalBet(b.id, "market", e.target.value)}
+                              placeholder="Ex: Ambas Marcam Sim, Placar Correto 2x1..."
+                              className={inputStyles}
+                            />
+                          </div>
+
+                          {/* Linha 3: Valor e Odd */}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <Label className="text-slate-400 text-xs mb-1.5">Valor</Label>
+                              <Input type="number" step="0.01" value={b.amount} onChange={(e) => updateAdditionalBet(b.id, "amount", e.target.value)} placeholder="0.00" className={inputStyles} />
+                            </div>
+                            <div>
+                              <Label className="text-slate-400 text-xs mb-1.5">Odd</Label>
+                              <Input type="number" step="0.01" value={b.odd} onChange={(e) => updateAdditionalBet(b.id, "odd", e.target.value)} placeholder="1.50" className={inputStyles} />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Botoes */}
+              <div className="flex flex-col sm:flex-row justify-end gap-3 pt-2">
+                <Button type="button" variant="outline" onClick={() => navigate("/Bets")} disabled={isSubmitting} className="border-slate-600/50 text-slate-300 hover:bg-slate-800/60 rounded-xl h-12 px-6">
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={isSubmitting || isLoadingData} className="bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white rounded-xl h-12 px-8 shadow-lg shadow-blue-900/30">
+                  {isSubmitting ? (<><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Salvando...</>) : (<><Save className="w-4 h-4 mr-2" /> Salvar Aposta</>)}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </GlobalErrorBoundary>
+  );
+}
