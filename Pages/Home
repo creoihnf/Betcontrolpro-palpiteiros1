@@ -1,0 +1,191 @@
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { 
+  TrendingUp, 
+  Target, 
+  DollarSign, 
+  Users, 
+  Calculator,
+  Sparkles,
+  ArrowRight,
+  CheckCircle2
+} from "lucide-react";
+
+export default function HomePage() {
+  const navigate = useNavigate();
+  const [isAnimated, setIsAnimated] = useState(false);
+
+  useEffect(() => {
+    setIsAnimated(true);
+  }, []);
+
+  const features = [
+    {
+      icon: TrendingUp,
+      title: "Dashboard Inteligente",
+      description: "Visualize suas apostas e lucros em tempo real com widgets personalizáveis",
+      color: "from-blue-500 to-cyan-500"
+    },
+    {
+      icon: DollarSign,
+      title: "Gestão Financeira",
+      description: "Controle total de contas, saldos e divisão de lucros com parceiros",
+      color: "from-green-500 to-emerald-500"
+    },
+    {
+      icon: Calculator,
+      title: "Calculadora Surebet",
+      description: "Calcule proteções e garantia de lucro automaticamente",
+      color: "from-purple-500 to-pink-500"
+    },
+    {
+      icon: Target,
+      title: "Analytics Avançado",
+      description: "Insights profundos sobre performance e ROI por estratégia",
+      color: "from-orange-500 to-red-500"
+    },
+    {
+      icon: Users,
+      title: "Múltiplos Perfis",
+      description: "Gerencie sua conta e contas de terceiros em um só lugar",
+      color: "from-indigo-500 to-purple-500"
+    },
+    {
+      icon: Sparkles,
+      title: "Automações",
+      description: "Notificações Telegram, atualização de resultados e muito mais",
+      color: "from-pink-500 to-rose-500"
+    }
+  ];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+      {/* Hero Section */}
+      <div className="container mx-auto px-4 py-20">
+        <div className={`text-center mb-16 transition-all duration-1000 ${isAnimated ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}>
+          <div className="inline-block mb-4">
+            <span className="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-6 py-2 rounded-full text-sm font-semibold">
+              Sistema Profissional de Gestão de Apostas
+            </span>
+          </div>
+          <h1 className="text-5xl md:text-7xl font-bold text-white mb-6">
+            <span className="bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+              BetControl Pro
+            </span>
+          </h1>
+          <p className="text-xl md:text-2xl text-slate-300 mb-8 max-w-3xl mx-auto">
+            Controle total das suas apostas com análises avançadas, múltiplas contas e automações inteligentes
+          </p>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <Button
+              size="lg"
+              onClick={() => navigate(createPageUrl("Dashboard"))}
+              className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-2xl shadow-blue-500/50 text-lg px-8 py-6"
+            >
+              Acessar Dashboard
+              <ArrowRight className="ml-2 w-5 h-5" />
+            </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              onClick={() => navigate(createPageUrl("AddBet"))}
+              className="border-2 border-slate-600 text-slate-300 hover:bg-slate-800 text-lg px-8 py-6"
+            >
+              Registrar Aposta
+            </Button>
+          </div>
+        </div>
+
+        {/* Features Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-16">
+          {features.map((feature, index) => (
+            <Card 
+              key={index}
+              className={`bg-slate-800/50 border-slate-700 backdrop-blur-sm hover:bg-slate-800/70 transition-all duration-300 transform hover:scale-105 ${
+                isAnimated ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+              }`}
+              style={{ transitionDelay: `${index * 100}ms` }}
+            >
+              <CardHeader>
+                <div className={`w-12 h-12 rounded-xl bg-gradient-to-r ${feature.color} flex items-center justify-center mb-4`}>
+                  <feature.icon className="w-6 h-6 text-white" />
+                </div>
+                <CardTitle className="text-white">{feature.title}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-slate-400">{feature.description}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* Quick Start Guide */}
+        <Card className="bg-gradient-to-r from-slate-800/50 to-slate-900/50 border-slate-700 backdrop-blur-sm">
+          <CardHeader>
+            <CardTitle className="text-2xl text-white flex items-center gap-2">
+              <Sparkles className="w-6 h-6 text-yellow-400" />
+              Como Começar
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+              <div className="text-center">
+                <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center text-white font-bold text-xl mx-auto mb-3">
+                  1
+                </div>
+                <h3 className="text-white font-semibold mb-2">Criar Conta Principal</h3>
+                <p className="text-slate-400 text-sm">Configure sua conta e adicione suas casas de apostas</p>
+              </div>
+              <div className="text-center">
+                <div className="w-12 h-12 bg-purple-500 rounded-full flex items-center justify-center text-white font-bold text-xl mx-auto mb-3">
+                  2
+                </div>
+                <h3 className="text-white font-semibold mb-2">Registrar Apostas</h3>
+                <p className="text-slate-400 text-sm">Adicione suas apostas com todos os detalhes</p>
+              </div>
+              <div className="text-center">
+                <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center text-white font-bold text-xl mx-auto mb-3">
+                  3
+                </div>
+                <h3 className="text-white font-semibold mb-2">Acompanhar Resultados</h3>
+                <p className="text-slate-400 text-sm">Marque resultados e veja lucros em tempo real</p>
+              </div>
+              <div className="text-center">
+                <div className="w-12 h-12 bg-pink-500 rounded-full flex items-center justify-center text-white font-bold text-xl mx-auto mb-3">
+                  4
+                </div>
+                <h3 className="text-white font-semibold mb-2">Analisar Performance</h3>
+                <p className="text-slate-400 text-sm">Use analytics para otimizar suas estratégias</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Benefits */}
+        <div className="mt-16 text-center">
+          <h2 className="text-3xl font-bold text-white mb-8">Por Que Escolher o BetControl Pro?</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto">
+            {[
+              "Interface moderna e intuitiva",
+              "Suporte a múltiplas contas",
+              "Calculadora Surebet integrada",
+              "Analytics profissional",
+              "Gestão de pagamentos",
+              "Notificações automáticas",
+              "Dark mode confortável",
+              "100% gratuito"
+            ].map((benefit, index) => (
+              <div key={index} className="flex items-center gap-3 text-slate-300">
+                <CheckCircle2 className="w-5 h-5 text-green-400 flex-shrink-0" />
+                <span>{benefit}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
